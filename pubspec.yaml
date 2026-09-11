@@ -70,6 +70,8 @@ flutter:
     - assets/sounds/burp.wav
     - assets/sounds/roar.wav
     - assets/sounds/goat.wav
+    - assets/sounds/meow.wav
+    - assets/sounds/gloups.wav
     - assets/images/
   fonts:
     - family: RubikSprayPaint

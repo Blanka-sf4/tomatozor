@@ -274,6 +274,15 @@ class _ListenScreenState extends State<ListenScreen>
   // d'avant pour la remettre ensuite.
   Timer? _faceTimer;
   String? _faceBefore;
+  // --- Mascottes (chat en mode normal, incognito en mode secours) ----------
+  // Frame imposée (miaou, gloups/caché) ou null = vie normale (clignement,
+  // oreille, coup d'œil, programmés au hasard dans le ticker).
+  final ValueNotifier<String> _mascotFrame = ValueNotifier('cat_normal');
+  String? _mascotOverride;
+  Timer? _mascotTimer;
+  double _nextMascotEventAt = 1.5;
+  double _mascotEventUntil = 0.0;
+
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
   double _nextBlinkAt = 2.0;
@@ -364,6 +373,32 @@ class _ListenScreenState extends State<ListenScreen>
     _store.load().then((_) {
       if (mounted) setState(() {});
     });
+    // Le chat t'accueille au lancement.
+    Future.delayed(const Duration(milliseconds: 600), () {
+      if (mounted) _greet();
+    });
+  }
+
+  /// La mascotte du mode courant te salue : le chat miaule, l'incognito
+  /// fait gloups et se planque sous son chapeau.
+  void _greet() {
+    if (_mode == AppMode.tap) {
+      _setMascot('incog_hide', const Duration(milliseconds: 1300));
+      unawaited(_player.play(AssetSource('sounds/gloups.wav')));
+    } else {
+      _setMascot('cat_meow', const Duration(milliseconds: 800));
+      unawaited(_player.play(AssetSource('sounds/meow.wav')));
+    }
+  }
+
+  void _setMascot(String frame, Duration d) {
+    _mascotTimer?.cancel();
+    _mascotOverride = frame;
+    _mascotFrame.value = frame;
+    _mascotTimer = Timer(d, () {
+      _mascotOverride = null;
+      _mascotFrame.value = _mode == AppMode.tap ? 'incog_normal' : 'cat_normal';
+    });
   }
 
   @override
@@ -372,11 +407,24 @@ class _ListenScreenState extends State<ListenScreen>
     for (final f in kAllFaces) {
       precacheImage(AssetImage('assets/images/dino_$f.png'), context);
     }
+    for (final f in [
+      'cat_normal',
+      'cat_blink',
+      'cat_ear',
+      'cat_meow',
+      'incog_normal',
+      'incog_peek',
+      'incog_hide',
+    ]) {
+      precacheImage(AssetImage('assets/images/$f.png'), context);
+    }
   }
 
   @override
   void dispose() {
     _faceTimer?.cancel();
+    _mascotTimer?.cancel();
+    _mascotFrame.dispose();
     _blink.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _stop();
@@ -415,6 +463,8 @@ class _ListenScreenState extends State<ListenScreen>
       _lastResult = null;
     });
     if (_mode == AppMode.tap) WakelockPlus.enable();
+    _mascotOverride = null;
+    _greet();
   }
 
   // --- Écoute (mode normal) ---------------------------------------------------------
@@ -726,6 +776,24 @@ class _ListenScreenState extends State<ListenScreen>
     } else if (_blink.value && t >= _blinkUntil) {
       _blink.value = false;
     }
+    // Vie des mascottes : un petit événement toutes les 2,5 à 6 s.
+    if (_mascotOverride == null) {
+      final tap = _mode == AppMode.tap;
+      if (t >= _nextMascotEventAt) {
+        if (tap) {
+          _mascotFrame.value = 'incog_peek';
+          _mascotEventUntil = t + 0.7;
+        } else {
+          final ear = _rng.nextBool();
+          _mascotFrame.value = ear ? 'cat_ear' : 'cat_blink';
+          _mascotEventUntil = t + (ear ? 0.35 : 0.14);
+        }
+        _nextMascotEventAt = t + 2.5 + _rng.nextDouble() * 3.5;
+      } else if (t >= _mascotEventUntil) {
+        final idle = tap ? 'incog_normal' : 'cat_normal';
+        if (_mascotFrame.value != idle) _mascotFrame.value = idle;
+      }
+    }
     // Le rebond du dino retombe tout seul.
     if (_dinoBounce.value > 0) {
       _dinoBounce.value = max(0, _dinoBounce.value - 0.08);
@@ -894,6 +962,7 @@ class _ListenScreenState extends State<ListenScreen>
         ),
         // "PASTELLE EDITION" en petit sous le nom, même police, même style.
         _buildSubtitle('PASTELLE EDITION', fire: fire),
+        if (!fire) _buildMascot(),
         if (fire) ...[
           Padding(
             padding: const EdgeInsets.only(top: 2),
@@ -907,8 +976,45 @@ class _ListenScreenState extends State<ListenScreen>
             ),
           ),
           _buildSubtitle('PARO EDITION', fire: true, fontSize: 20),
+          _buildMascot(),
         ],
       ],
+    );
+  }
+
+  /// La mascotte sous le sous-titre. Une fois calé, elle bouge sur le
+  /// beat : le chat hoche la tête, l'incognito tape du journal.
+  Widget _buildMascot() {
+    final tap = _mode == AppMode.tap;
+    return SizedBox(
+      height: 64,
+      child: ValueListenableBuilder<String>(
+        valueListenable: _mascotFrame,
+        builder: (context, frame, _) {
+          return ValueListenableBuilder<double>(
+            valueListenable: _pulse,
+            builder: (context, pulse, child) {
+              final onBeat = _locked && _beatAnchor != null;
+              final side = _beatIndex.isEven ? 1.0 : -1.0;
+              // Chat : hochement ; incognito : le journal tape (rebond).
+              final angle = onBeat && !tap ? side * 0.18 * pulse : 0.0;
+              final dy = onBeat && tap
+                  ? 6 * pulse
+                  : (onBeat ? -4 * pulse : 0.0);
+              return Transform.translate(
+                offset: Offset(0, dy),
+                child: Transform.rotate(angle: angle, child: child),
+              );
+            },
+            child: Image.asset(
+              'assets/images/$frame.png',
+              height: 60,
+              filterQuality: FilterQuality.medium,
+              gaplessPlayback: true,
+            ),
+          );
+        },
+      ),
     );
   }
 
