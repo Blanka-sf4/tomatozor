@@ -49,7 +49,11 @@ class HistoryStore {
 
   Future<Directory> _directory() async {
     if (_dir != null) return _dir!;
-    final base = await getApplicationDocumentsDirectory();
+    // Dossier "externe" de l'appli (Android/data/<pkg>/files) : toujours
+    // privé et supprimé avec l'appli, mais lisible par adb — pratique pour
+    // récupérer les extraits et calibrer le détecteur sur de vrais sons.
+    final base = await getExternalStorageDirectory() ??
+        await getApplicationDocumentsDirectory();
     _dir = Directory('${base.path}/history');
     if (!await _dir!.exists()) await _dir!.create(recursive: true);
     return _dir!;
