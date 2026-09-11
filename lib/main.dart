@@ -89,7 +89,7 @@ class TomatozorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TOMATOZOR Kevin Edition',
+      title: 'TOMATOZOR Pastelle Edition',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: kPink,
@@ -680,7 +680,7 @@ class _ListenScreenState extends State<ListenScreen>
             ),
           ),
         ),
-        // "KEVIN EDITION" en petit sous le nom, même police, même style.
+        // "PASTELLE EDITION" en petit sous le nom, même police, même style.
         Padding(
           padding: const EdgeInsets.only(top: 4),
           child: FittedBox(
@@ -688,7 +688,7 @@ class _ListenScreenState extends State<ListenScreen>
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                for (final ch in 'KEVIN EDITION'.split(''))
+                for (final ch in 'PASTELLE EDITION'.split(''))
                   if (ch == ' ')
                     const SizedBox(width: 12)
                   else
