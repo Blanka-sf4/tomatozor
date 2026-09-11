@@ -202,6 +202,8 @@ class _ListenScreenState extends State<ListenScreen>
   final BpmDetector _detector = BpmDetector(sampleRate: kSampleRate);
 
   bool _isListening = false;
+  // Vrai dès que le micro a capté un vrai signal (> -45 dB) depuis le start.
+  bool _soundDetected = false;
   String? _error;
 
   // Vu-mètre.
@@ -345,6 +347,7 @@ class _ListenScreenState extends State<ListenScreen>
 
     setState(() {
       _isListening = true;
+      _soundDetected = false;
       _error = null;
       _lastResult = null;
       _displayBpm = null;
@@ -418,6 +421,7 @@ class _ListenScreenState extends State<ListenScreen>
     setState(() {
       _dbLevel = db;
       _level = _level * 0.7 + level * 0.3;
+      if (db > -45) _soundDetected = true;
       if (result != null) {
         _lastResult = result;
         _displayBpm = _median(_history);
@@ -745,44 +749,49 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
-  /// Le bouton du mode normal : rond, violet au repos, rose quand il écoute.
-  Widget _buildMicButton() {
-    return SizedBox(
-      width: 120,
-      height: 120,
-      child: FilledButton(
-        onPressed: _isListening ? _stop : _start,
-        style: FilledButton.styleFrom(
-          shape: const CircleBorder(),
-          backgroundColor: _isListening ? kPink : kPurple,
-          foregroundColor: Colors.white,
-          elevation: _isListening ? 12 : 4,
-          shadowColor: _isListening ? kPink : kPurple,
-        ),
-        child: Icon(_isListening ? Icons.stop : Icons.mic, size: 56),
-      ),
-    );
-  }
-
-  /// Le bouton du mode secours : la tête du dino, qui rebondit au tap.
+  /// Le bouton : la tête du dino, qui rebondit au tap. Son halo dit
+  /// l'état : violet au repos, rose quand le micro écoute, orange en mode
+  /// secours.
   Widget _buildDinoButton() {
+    final tap = _mode == AppMode.tap;
+    final active = tap || _isListening;
+    final Color glow;
+    if (tap) {
+      glow = const Color(0xFFFF6A00);
+    } else if (_isListening) {
+      glow = kPink;
+    } else {
+      glow = kPurple;
+    }
+    final VoidCallback onTap;
+    if (tap) {
+      onTap = _onTap;
+    } else {
+      onTap = () {
+        _dinoBounce.value = 1;
+        if (!_ticker.isActive) _ticker.start();
+        _isListening ? _stop() : _start();
+      };
+    }
+
     return GestureDetector(
-      onTapDown: (_) => _onTap(),
+      onTapDown: (_) => onTap(),
       child: ValueListenableBuilder<double>(
         valueListenable: _dinoBounce,
         builder: (context, bounce, child) {
           return Transform.scale(scale: 1 - 0.15 * bounce, child: child);
         },
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
           width: 180,
           height: 180,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: const Color(0xFFFF6A00).withValues(alpha: 0.5),
-                blurRadius: 30,
-                spreadRadius: 2,
+                color: glow.withValues(alpha: active ? 0.6 : 0.45),
+                blurRadius: active ? 36 : 24,
+                spreadRadius: active ? 4 : 1,
               ),
             ],
           ),
@@ -829,18 +838,26 @@ class _ListenScreenState extends State<ListenScreen>
       lines = [
         Text('Calé ✓', style: theme.textTheme.bodyLarge),
         const SizedBox(height: 4),
+        Text('Tape le dino pour recommencer', style: theme.textTheme.bodySmall),
+      ];
+    } else if (!_isListening) {
+      lines = [Text('Appuie sur le dino', style: theme.textTheme.bodyLarge)];
+    } else if (!_soundDetected) {
+      lines = [
+        Text('Micro ouvert, j\'écoute…', style: theme.textTheme.bodyLarge),
+        const SizedBox(height: 4),
         Text(
-          'Appuie sur le micro pour recommencer',
+          'Aucun son pour l\'instant (${_dbLevel.toStringAsFixed(0)} dB)',
           style: theme.textTheme.bodySmall,
         ),
       ];
-    } else if (!_isListening) {
-      lines = [Text('Appuie sur le micro', style: theme.textTheme.bodyLarge)];
     } else if (result == null) {
       lines = [
+        Text('Son détecté ✓', style: theme.textTheme.bodyLarge),
+        const SizedBox(height: 4),
         Text(
           'Analyse… ${buffered.toStringAsFixed(1)} s',
-          style: theme.textTheme.bodyLarge,
+          style: theme.textTheme.bodySmall,
         ),
       ];
     } else {
@@ -859,57 +876,92 @@ class _ListenScreenState extends State<ListenScreen>
     return SizedBox(height: 48, child: Column(children: lines));
   }
 
-  Widget _buildRangeSelector(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      children: [
-        Text('Plage de tempo', style: theme.textTheme.labelLarge),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 8,
-          runSpacing: 4,
-          alignment: WrapAlignment.center,
-          children: [
-            for (var i = 0; i < kRanges.length; i++)
-              ChoiceChip(
-                label: Text(kRanges[i].label),
-                selected: i == _rangeIndex,
-                onSelected: (_) => _selectRange(i),
-              ),
-          ],
-        ),
-      ],
+  /// Le bouton Options, en bas : ouvre le popup des plages de tempo.
+  Widget _buildOptionsButton() {
+    return OutlinedButton.icon(
+      onPressed: _showOptions,
+      icon: const Icon(Icons.tune),
+      label: Text('Options  ·  ${kRanges[_rangeIndex].label}'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: Colors.white,
+        side: const BorderSide(color: kPurple, width: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      ),
     );
   }
 
-  Widget _buildVuMeter(BuildContext context) {
-    final theme = Theme.of(context);
-    return Row(
-      children: [
-        const Icon(Icons.mic, size: 16),
-        const SizedBox(width: 8),
-        Expanded(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: _level,
-              minHeight: 8,
-              backgroundColor: Colors.white12,
+  /// Popup à bordure arc-en-ciel : une case par plage, une seule cochée.
+  Future<void> _showOptions() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            // La bordure arc-en-ciel : un dégradé en fond, et la boîte
+            // sombre par-dessus avec 4 px de marge.
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: kRainbow,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A0A24),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: StatefulBuilder(
+                builder: (context, setDialogState) {
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      RainbowText(
+                        'Plage de tempo',
+                        style: Theme.of(context).textTheme.titleLarge!.copyWith(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 2,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      for (var i = 0; i < kRanges.length; i++)
+                        CheckboxListTile(
+                          value: i == _rangeIndex,
+                          activeColor: kRainbow[i % kRainbow.length],
+                          title: Text(
+                            kRanges[i].label,
+                            style: TextStyle(
+                              fontWeight: i == _rangeIndex
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                          subtitle: i == 0
+                              ? const Text('Détection large, a priori 90-180')
+                              : null,
+                          dense: true,
+                          onChanged: (_) {
+                            _selectRange(i);
+                            setDialogState(() {});
+                          },
+                        ),
+                      const SizedBox(height: 4),
+                      TextButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('OK'),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
           ),
-        ),
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 64,
-          child: Text(
-            '${_dbLevel.toStringAsFixed(0)} dB',
-            textAlign: TextAlign.right,
-            style: theme.textTheme.bodySmall,
-          ),
-        ),
-        // Place pour le bouton ⚠ en bas à droite.
-        const SizedBox(width: 44),
-      ],
+        );
+      },
     );
   }
 
@@ -965,16 +1017,14 @@ class _ListenScreenState extends State<ListenScreen>
                   const Spacer(),
 
                   // --- Le bouton, au centre ------------------------------
-                  if (tap) _buildDinoButton() else _buildMicButton(),
+                  _buildDinoButton(),
                   const Spacer(),
 
                   // --- Bas de l'écran ---------------------------------------
-                  if (!tap) ...[
-                    _buildRangeSelector(context),
-                    const SizedBox(height: 24),
-                    _buildVuMeter(context),
-                  ] else
-                    const SizedBox(height: 40),
+                  if (!tap)
+                    _buildOptionsButton()
+                  else
+                    const SizedBox(height: 48),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(
