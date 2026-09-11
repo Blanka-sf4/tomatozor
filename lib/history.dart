@@ -41,6 +41,9 @@ class HistoryStore {
   static const int defaultLatencyMs = 60;
   int latencyMs = defaultLatencyMs;
 
+  /// Dernier tempo réglé dans le mode métronome.
+  double metroBpm = 120;
+
   Directory? _dir;
 
   Future<Directory> _directory() async {
@@ -69,6 +72,7 @@ class HistoryStore {
         );
       lastTapBpm = (j['lastTapBpm'] as num?)?.toDouble();
       latencyMs = (j['latencyMs'] as num?)?.toInt() ?? defaultLatencyMs;
+      metroBpm = (j['metroBpm'] as num?)?.toDouble() ?? 120;
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -83,6 +87,7 @@ class HistoryStore {
         'entries': entries.map((e) => e.toJson()).toList(),
         'lastTapBpm': lastTapBpm,
         'latencyMs': latencyMs,
+        'metroBpm': metroBpm,
       }),
     );
   }
@@ -106,6 +111,11 @@ class HistoryStore {
     entries.remove(entry);
     final f = File(entry.file);
     if (await f.exists()) await f.delete();
+    await _save();
+  }
+
+  Future<void> setMetroBpm(double bpm) async {
+    metroBpm = bpm;
     await _save();
   }
 

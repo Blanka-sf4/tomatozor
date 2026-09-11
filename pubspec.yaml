@@ -73,6 +73,9 @@ flutter:
     - assets/sounds/goat.wav
     - assets/sounds/meow.wav
     - assets/sounds/gloups.wav
+    - assets/sounds/click.wav
+    - assets/sounds/click_hi.wav
+    - assets/sounds/cluck.wav
     - assets/images/
   fonts:
     - family: RubikSprayPaint

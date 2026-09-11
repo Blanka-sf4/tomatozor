@@ -13,6 +13,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'bpm_detector.dart';
 import 'dino.dart';
 import 'history.dart';
+import 'metronome.dart';
 
 // Paramètres audio, partagés avec le détecteur.
 const int kSampleRate = 44100; // échantillons par seconde
@@ -135,9 +136,10 @@ class _Flame {
 /// toutes les couleurs, qui clignotent et tournent, plus une bordure qui
 /// pulse. [t] : progression 0 → 1 du flash.
 class _PartyPainter extends CustomPainter {
-  _PartyPainter(this.t, this.seed);
+  _PartyPainter(this.t, this.seed, {this.count = 42});
   final double t;
   final int seed;
+  final int count;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -161,7 +163,7 @@ class _PartyPainter extends CustomPainter {
 
     // Néons : 42 formes, chacune avec sa couleur, sa vitesse de
     // clignotement et sa rotation.
-    for (var i = 0; i < 42; i++) {
+    for (var i = 0; i < count; i++) {
       final color = kRainbow[i % kRainbow.length];
       final x = rng.nextDouble() * size.width;
       final y = rng.nextDouble() * size.height;
@@ -201,8 +203,32 @@ class _PartyPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(_PartyPainter old) => old.t != t || old.seed != seed;
+  bool shouldRepaint(_PartyPainter old) =>
+      old.t != t || old.seed != seed || old.count != count;
 }
+
+/// Tranche de tempo du métronome : 0 lent, 1 moyen, 2 rapide, 3 extrême.
+int tierFor(double bpm) =>
+    bpm < 100 ? 0 : (bpm < 160 ? 1 : (bpm < 220 ? 2 : 3));
+
+/// Les quatre atmosphères du métronome, une par tranche.
+const kMetroBackgrounds = [
+  [Color(0xFF050A2A), Color(0xFF16205C), Color(0xFF2B2A7A)], // nuit bleue
+  [Color(0xFF3A0F3F), Color(0xFF7B2C6B), Color(0xFFB03A8C)], // rose profond
+  kFireBackground, // braises
+  [
+    Color(0xFF000000),
+    Color(0xFF3A0040),
+    Color(0xFFB000A0),
+    Color(0xFF000000),
+  ], // magenta
+];
+const kMetroAccents = [
+  Color(0xFF6FA8FF),
+  kPink,
+  Color(0xFFFF8A00),
+  Color(0xFFFF00C8),
+];
 
 /// Les deux modes de l'appli.
 enum AppMode {
@@ -211,6 +237,9 @@ enum AppMode {
 
   /// "Mode de secours" : tap tempo, on tape le rythme sur le dino.
   tap,
+
+  /// Métronome : clics bois, tous les animaux font la fête.
+  metro,
 }
 
 void main() {
@@ -362,6 +391,10 @@ class _ListenScreenState extends State<ListenScreen>
   // d'avant pour la remettre ensuite.
   Timer? _faceTimer;
   String? _faceBefore;
+  // --- Métronome ---------------------------------------------------------------
+  late final Metronome _metro = Metronome(onBeat: _onMetroBeat);
+  final List<DateTime> _metroTaps = [];
+
   // --- Mascottes (chat en mode normal, incognito en mode secours) ----------
   // Frame imposée (miaou, gloups/caché) ou null = vie normale (clignement,
   // oreille, coup d'œil, programmés au hasard dans le ticker).
@@ -472,8 +505,10 @@ class _ListenScreenState extends State<ListenScreen>
       if (mounted) setState(() => _playingFile = null);
     });
     _store.load().then((_) {
+      _metro.setBpm(_store.metroBpm);
       if (mounted) setState(() {});
     });
+    _metro.init();
     // Le chat t'accueille au lancement.
     Future.delayed(const Duration(milliseconds: 600), () {
       if (mounted) _greet();
@@ -483,7 +518,10 @@ class _ListenScreenState extends State<ListenScreen>
   /// La mascotte du mode courant te salue : le chat miaule, l'incognito
   /// fait gloups et se planque sous son chapeau.
   void _greet() {
-    if (_mode == AppMode.tap) {
+    if (_mode == AppMode.metro) {
+      _setMascot('chicken_cluck', const Duration(milliseconds: 1100));
+      unawaited(_player.play(AssetSource('sounds/cluck.wav')));
+    } else if (_mode == AppMode.tap) {
       _setMascot('incog_hide', const Duration(milliseconds: 1300));
       unawaited(_player.play(AssetSource('sounds/gloups.wav')));
     } else {
@@ -492,13 +530,19 @@ class _ListenScreenState extends State<ListenScreen>
     }
   }
 
+  String get _idleMascot => switch (_mode) {
+    AppMode.listen => 'cat_normal',
+    AppMode.tap => 'incog_normal',
+    AppMode.metro => 'chicken_normal',
+  };
+
   void _setMascot(String frame, Duration d) {
     _mascotTimer?.cancel();
     _mascotOverride = frame;
     _mascotFrame.value = frame;
     _mascotTimer = Timer(d, () {
       _mascotOverride = null;
-      _mascotFrame.value = _mode == AppMode.tap ? 'incog_normal' : 'cat_normal';
+      _mascotFrame.value = _idleMascot;
     });
   }
 
@@ -516,6 +560,9 @@ class _ListenScreenState extends State<ListenScreen>
       'incog_normal',
       'incog_peek',
       'incog_hide',
+      'chicken_normal',
+      'chicken_blink',
+      'chicken_cluck',
     ]) {
       precacheImage(AssetImage('assets/images/$f.png'), context);
     }
@@ -524,6 +571,7 @@ class _ListenScreenState extends State<ListenScreen>
   @override
   void dispose() {
     _faceTimer?.cancel();
+    _metro.dispose();
     _mascotTimer?.cancel();
     _mascotFrame.dispose();
     _blink.dispose();
@@ -548,24 +596,78 @@ class _ListenScreenState extends State<ListenScreen>
     if (state == AppLifecycleState.paused ||
         state == AppLifecycleState.hidden) {
       _stop();
+      if (_metro.running) _metroToggle();
     }
   }
 
   // --- Mode ---------------------------------------------------------------------
 
   void _switchMode() {
+    _setMode(_mode == AppMode.listen ? AppMode.tap : AppMode.listen);
+  }
+
+  void _setMode(AppMode mode) {
     _stop();
+    _metro.stop();
     _taps.clear();
     _dinoFace = 'head';
     _dinoPressed = false;
     setState(() {
-      _mode = _mode == AppMode.listen ? AppMode.tap : AppMode.listen;
+      _mode = mode;
       _displayBpm = null;
       _lastResult = null;
     });
-    if (_mode == AppMode.tap) WakelockPlus.enable();
+    if (_mode != AppMode.listen) WakelockPlus.enable();
     _mascotOverride = null;
     _greet();
+  }
+
+  // --- Métronome ----------------------------------------------------------------
+
+  void _onMetroBeat(int beat) {
+    // L'horloge du beat suit le métronome : tout ce qui danse suit.
+    _beatAnchor = DateTime.now();
+    _beatPeriodMs = 60000 / _metro.bpm;
+  }
+
+  void _metroToggle() {
+    if (_metro.running) {
+      _metro.stop();
+      setState(() {
+        _locked = false;
+        _beatAnchor = null;
+      });
+    } else {
+      _partySeed = _rng.nextInt(1 << 30);
+      _partyStartedAt = _tick.value;
+      _metro.start();
+      setState(() => _locked = true);
+    }
+  }
+
+  void _metroSetBpm(double bpm) {
+    _metro.setBpm(bpm);
+    _store.setMetroBpm(_metro.bpm);
+    if (_metro.running) _beatPeriodMs = 60000 / _metro.bpm;
+    setState(() {});
+  }
+
+  /// Tap tempo du métronome : moyenne des derniers intervalles.
+  void _metroTap() {
+    final now = DateTime.now();
+    if (_metroTaps.isNotEmpty &&
+        now.difference(_metroTaps.last) > _tapTimeout) {
+      _metroTaps.clear();
+    }
+    _metroTaps.add(now);
+    if (_metroTaps.length > 9) _metroTaps.removeAt(0);
+    if (_metroTaps.length < 2) return;
+    var total = 0.0;
+    for (var i = 1; i < _metroTaps.length; i++) {
+      total +=
+          _metroTaps[i].difference(_metroTaps[i - 1]).inMicroseconds / 1000;
+    }
+    _metroSetBpm(60000 / (total / (_metroTaps.length - 1)));
   }
 
   // --- Écoute (mode normal) ---------------------------------------------------------
@@ -920,7 +1022,10 @@ class _ListenScreenState extends State<ListenScreen>
     if (_mascotOverride == null) {
       final tap = _mode == AppMode.tap;
       if (t >= _nextMascotEventAt) {
-        if (tap) {
+        if (_mode == AppMode.metro) {
+          _mascotFrame.value = 'chicken_blink';
+          _mascotEventUntil = t + 0.14;
+        } else if (tap) {
           _mascotFrame.value = 'incog_peek';
           _mascotEventUntil = t + 0.7;
         } else {
@@ -930,7 +1035,7 @@ class _ListenScreenState extends State<ListenScreen>
         }
         _nextMascotEventAt = t + 2.5 + _rng.nextDouble() * 3.5;
       } else if (t >= _mascotEventUntil) {
-        final idle = tap ? 'incog_normal' : 'cat_normal';
+        final idle = _idleMascot;
         if (_mascotFrame.value != idle) _mascotFrame.value = idle;
       }
     }
@@ -1106,8 +1211,13 @@ class _ListenScreenState extends State<ListenScreen>
           ),
         ),
         // "PASTELLE EDITION" en petit sous le nom, même police, même style.
-        _buildSubtitle('PASTELLE EDITION', fire: fire),
-        if (!fire) _buildMascot(),
+        if (_mode == AppMode.metro) ...[
+          _buildSubtitle('METRONOME EDITION', fire: false),
+          _buildMascot(size: 110),
+        ] else ...[
+          _buildSubtitle('PASTELLE EDITION', fire: fire),
+          if (!fire) _buildMascot(),
+        ],
         if (fire) ...[
           Padding(
             padding: const EdgeInsets.only(top: 2),
@@ -1144,10 +1254,10 @@ class _ListenScreenState extends State<ListenScreen>
 
   /// La mascotte sous le sous-titre. Une fois calé, elle bouge sur le
   /// beat : le chat hoche la tête, l'incognito tape du journal.
-  Widget _buildMascot() {
+  Widget _buildMascot({double size = 90}) {
     final tap = _mode == AppMode.tap;
     return SizedBox(
-      height: 96,
+      height: size + 6,
       child: ValueListenableBuilder<String>(
         valueListenable: _mascotFrame,
         builder: (context, frame, _) {
@@ -1168,7 +1278,7 @@ class _ListenScreenState extends State<ListenScreen>
             },
             child: Image.asset(
               'assets/images/$frame.png',
-              height: 90,
+              height: size,
               filterQuality: FilterQuality.medium,
               gaplessPlayback: true,
             ),
@@ -1729,7 +1839,7 @@ class _ListenScreenState extends State<ListenScreen>
   }
 
   /// Popup Historique : les 5 derniers calages, avec date, BPM, ▶ et 🗑.
-  Future<void> _showHistory() async {
+  Future<void> _showHistory({bool pick = false}) async {
     await showDialog<void>(
       context: context,
       builder: (context) {
@@ -1765,7 +1875,7 @@ class _ListenScreenState extends State<ListenScreen>
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         RainbowText(
-                          'Historique',
+                          pick ? 'Reprendre un tempo' : 'Historique',
                           style: Theme.of(context).textTheme.titleLarge!
                               .copyWith(
                                 fontWeight: FontWeight.w900,
@@ -1781,6 +1891,12 @@ class _ListenScreenState extends State<ListenScreen>
                         for (final e in entries)
                           ListTile(
                             dense: true,
+                            onTap: pick
+                                ? () {
+                                    _metroSetBpm(e.bpm);
+                                    Navigator.of(context).pop();
+                                  }
+                                : null,
                             leading: IconButton(
                               iconSize: 32,
                               color: kGreenSign,
@@ -2032,6 +2148,22 @@ class _ListenScreenState extends State<ListenScreen>
                           ),
                         const Divider(height: 20),
                         _buildLatencyControl(setDialogState),
+                        const Divider(height: 20),
+                        FilledButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            _setMode(AppMode.metro);
+                          },
+                          icon: const Text(
+                            '🐔',
+                            style: TextStyle(fontSize: 20),
+                          ),
+                          label: const Text('Mode Métronome'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: const Color(0xFF16205C),
+                            foregroundColor: Colors.white,
+                          ),
+                        ),
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),
@@ -2052,6 +2184,15 @@ class _ListenScreenState extends State<ListenScreen>
   /// Le petit bouton en bas à droite : ⚠ rouge pour passer en mode secours,
   /// micro pour en revenir.
   Widget _buildModeToggle() {
+    if (_mode == AppMode.metro) {
+      return IconButton(
+        onPressed: () => _setMode(AppMode.listen),
+        tooltip: 'Retour au mode micro',
+        iconSize: 28,
+        color: kPink,
+        icon: const Icon(Icons.mic),
+      );
+    }
     final tap = _mode == AppMode.tap;
     return IconButton(
       onPressed: _switchMode,
@@ -2059,6 +2200,186 @@ class _ListenScreenState extends State<ListenScreen>
       iconSize: 28,
       color: tap ? kPink : kAlertRed,
       icon: Icon(tap ? Icons.mic : Icons.warning_rounded),
+    );
+  }
+
+  // --- Interface du métronome -------------------------------------------------------
+
+  /// Un animal qui fait la fête. L'animal de la tranche en cours est en
+  /// avant et déchaîné ; les autres suivent, plus mollement. L'intensité
+  /// générale monte avec le tempo.
+  Widget _buildPartyAnimal(String emoji, int tier, int currentTier, int index) {
+    final star = tier == currentTier;
+    final intensity = [0.35, 0.6, 0.85, 1.2][currentTier];
+    return ValueListenableBuilder<double>(
+      valueListenable: _tick,
+      builder: (context, t, _) {
+        final pulse = _metro.running ? _pulse.value : 0.0;
+        final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
+        final amp = intensity * (star ? 1.0 : 0.45);
+        final sway = _metro.running ? 0.0 : 0.05 * sin(t * 1.5 + index);
+        return Transform.translate(
+          offset: Offset(0, -26 * amp * pulse),
+          child: Transform.rotate(
+            angle: side * 0.5 * amp * pulse + sway,
+            child: Transform.scale(
+              scale: (star ? 1.35 : 1.0) * (1 + 0.4 * amp * pulse),
+              child: Opacity(
+                opacity: star ? 1.0 : 0.75,
+                child: Text(emoji, style: const TextStyle(fontSize: 40)),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMetroPanel(BuildContext context) {
+    final theme = Theme.of(context);
+    final bpm = _metro.bpm;
+    final tier = tierFor(bpm);
+    final accent = kMetroAccents[tier];
+    final running = _metro.running;
+
+    Widget roundButton(IconData icon, VoidCallback onTap, {double size = 44}) {
+      return SizedBox(
+        width: size,
+        height: size,
+        child: FilledButton(
+          onPressed: onTap,
+          style: FilledButton.styleFrom(
+            shape: const CircleBorder(),
+            padding: EdgeInsets.zero,
+            backgroundColor: accent.withValues(alpha: 0.25),
+            foregroundColor: Colors.white,
+          ),
+          child: Icon(icon, size: size * 0.55),
+        ),
+      );
+    }
+
+    final panel = Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(color: accent, width: 3),
+        boxShadow: [
+          BoxShadow(
+            color: accent.withValues(alpha: running ? 0.6 : 0.3),
+            blurRadius: 30,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              roundButton(Icons.remove, () => _metroSetBpm(bpm - 1)),
+              const SizedBox(width: 12),
+              Text(
+                bpm.round().toString(),
+                style: theme.textTheme.displayLarge!.copyWith(
+                  fontSize: 72,
+                  fontWeight: FontWeight.bold,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(width: 12),
+              roundButton(Icons.add, () => _metroSetBpm(bpm + 1)),
+            ],
+          ),
+          Text(
+            'BPM',
+            style: theme.textTheme.titleMedium?.copyWith(color: Colors.white70),
+          ),
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              activeTrackColor: accent,
+              thumbColor: accent,
+              inactiveTrackColor: Colors.white24,
+            ),
+            child: Slider(
+              value: bpm.clamp(Metronome.minBpm, Metronome.maxBpm),
+              min: Metronome.minBpm,
+              max: Metronome.maxBpm,
+              onChanged: (v) => _metroSetBpm(v.roundToDouble()),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _metroTap,
+                icon: const Icon(Icons.touch_app),
+                label: const Text('TAP'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(color: accent, width: 2),
+                ),
+              ),
+              const SizedBox(width: 12),
+              OutlinedButton.icon(
+                onPressed: () => _showHistory(pick: true),
+                icon: const Icon(Icons.history),
+                label: const Text('HISTO'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  side: BorderSide(color: kGreenSign, width: 2),
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: 64,
+                height: 64,
+                child: FilledButton(
+                  onPressed: _metroToggle,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: EdgeInsets.zero,
+                    backgroundColor: running ? kAlertRed : kGreenSign,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Icon(
+                    running ? Icons.stop : Icons.play_arrow,
+                    size: 36,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          _buildBeatDot(),
+        ],
+      ),
+    );
+
+    const animals = [
+      ('🦕', 0),
+      ('🐴', 1),
+      ('🦖', 2),
+      ('🐐', 3),
+      ('🐷', 1),
+      ('🦄', 2),
+    ];
+    Widget column(List<int> idx) => Column(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      children: [
+        for (final i in idx)
+          _buildPartyAnimal(animals[i].$1, animals[i].$2, tier, i),
+      ],
+    );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(width: 52, child: column([0, 1, 2])),
+        Expanded(child: panel),
+        SizedBox(width: 52, child: column([3, 4, 5])),
+      ],
     );
   }
 
@@ -2071,7 +2392,9 @@ class _ListenScreenState extends State<ListenScreen>
     final theme = ThemeData(
       colorScheme: ColorScheme.fromSeed(
         seedColor: tap ? const Color(0xFFFF6A00) : kPink,
-        brightness: tap ? Brightness.dark : Brightness.light,
+        brightness: _mode == AppMode.listen
+            ? Brightness.light
+            : Brightness.dark,
       ),
       scaffoldBackgroundColor: Colors.transparent,
     );
@@ -2085,7 +2408,11 @@ class _ListenScreenState extends State<ListenScreen>
           body: Container(
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: tap ? kFireBackground : kKawaiiBackground,
+                colors: switch (_mode) {
+                  AppMode.listen => kKawaiiBackground,
+                  AppMode.tap => kFireBackground,
+                  AppMode.metro => kMetroBackgrounds[tierFor(_metro.bpm)],
+                },
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -2100,31 +2427,36 @@ class _ListenScreenState extends State<ListenScreen>
                         _buildHeader(context),
                         const Spacer(),
 
-                        // --- Le gros chiffre, encadré par les licornes / flammes
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            if (tap)
-                              _buildFlame(seed: 1)
-                            else
-                              _buildUnicorn(flip: false),
-                            const SizedBox(width: 8),
-                            _buildBpmDigits(context),
-                            const SizedBox(width: 8),
-                            if (tap)
-                              _buildFlame(seed: 2)
-                            else
-                              _buildUnicorn(flip: true),
-                          ],
-                        ),
-                        _buildBpmLabel(theme),
-                        _buildBeatDot(),
-                        _buildStatus(context),
-                        const Spacer(),
+                        if (_mode == AppMode.metro) ...[
+                          _buildMetroPanel(context),
+                          const Spacer(),
+                        ] else ...[
+                          // --- Le gros chiffre, encadré par les licornes / flammes
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (tap)
+                                _buildFlame(seed: 1)
+                              else
+                                _buildUnicorn(flip: false),
+                              const SizedBox(width: 8),
+                              _buildBpmDigits(context),
+                              const SizedBox(width: 8),
+                              if (tap)
+                                _buildFlame(seed: 2)
+                              else
+                                _buildUnicorn(flip: true),
+                            ],
+                          ),
+                          _buildBpmLabel(theme),
+                          _buildBeatDot(),
+                          _buildStatus(context),
+                          const Spacer(),
 
-                        // --- Le bouton, au centre ------------------------------
-                        _buildDinoButton(),
-                        const Spacer(),
+                          // --- Le bouton, au centre ------------------------------
+                          _buildDinoButton(),
+                          const Spacer(),
+                        ],
 
                         // --- Bas de l'écran ---------------------------------------
                         const SizedBox(height: 56),
@@ -2139,16 +2471,17 @@ class _ListenScreenState extends State<ListenScreen>
                       ],
                     ),
                   ),
-                  if (!tap)
+                  if (_mode == AppMode.listen)
                     Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
-                  Positioned(
-                    left: 0,
-                    right: 0,
-                    bottom: 72,
-                    child: Center(
-                      child: tap ? _buildLastTap() : _buildHistorySign(),
+                  if (_mode != AppMode.metro)
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 72,
+                      child: Center(
+                        child: tap ? _buildLastTap() : _buildHistorySign(),
+                      ),
                     ),
-                  ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
                   // La fête : néons de toutes les couleurs tant que ça danse
                   // (calé, beat en cours), dans les deux modes.
@@ -2162,6 +2495,9 @@ class _ListenScreenState extends State<ListenScreen>
                               painter: _PartyPainter(
                                 (t - _partyStartedAt),
                                 _partySeed,
+                                count: _mode == AppMode.metro
+                                    ? [8, 18, 30, 48][tierFor(_metro.bpm)]
+                                    : 42,
                               ),
                             );
                           },
