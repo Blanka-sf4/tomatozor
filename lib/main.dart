@@ -142,7 +142,8 @@ class _PartyPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final rng = Random(seed);
-    final fade = t < 0.85 ? 1.0 : 1 - (t - 0.85) / 0.15;
+    // Monte en 0,3 s, puis reste. [t] est en secondes depuis le calage.
+    final fade = (t / 0.3).clamp(0.0, 1.0);
 
     // Bordure néon qui pulse
     final border = Paint()
@@ -151,7 +152,7 @@ class _PartyPainter extends CustomPainter {
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14)
       ..shader = SweepGradient(
         colors: [...kRainbow, kRainbow.first],
-        transform: GradientRotation(t * 6.28),
+        transform: GradientRotation(t * 2.5),
       ).createShader(Offset.zero & size);
     canvas.drawRRect(
       RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(28)),
@@ -165,8 +166,8 @@ class _PartyPainter extends CustomPainter {
       final x = rng.nextDouble() * size.width;
       final y = rng.nextDouble() * size.height;
       final len = 30 + rng.nextDouble() * 90;
-      final angle = rng.nextDouble() * 6.28 + t * (rng.nextBool() ? 2 : -2);
-      final blinkRate = 6 + rng.nextDouble() * 10;
+      final angle = rng.nextDouble() * 6.28 + t * (rng.nextBool() ? 0.8 : -0.8);
+      final blinkRate = 2 + rng.nextDouble() * 4;
       final phase = rng.nextDouble() * 6.28;
       final on = (sin(t * blinkRate * 6.28 + phase) + 1) / 2;
       final alpha = (0.25 + 0.75 * on) * fade;
@@ -979,9 +980,11 @@ class _ListenScreenState extends State<ListenScreen>
   }
 
   int _partySeed = 0;
+  double _partyStartedAt = 0;
 
   Future<void> _celebrate(Animal animal) async {
     _partySeed = _rng.nextInt(1 << 30);
+    _partyStartedAt = _tick.value;
     // Il hurle de joie pendant toute la durée du cri.
     _setTemporaryFace('yell', Duration(milliseconds: animal.ms));
     _flash.forward(from: 0);
@@ -1120,10 +1123,10 @@ class _ListenScreenState extends State<ListenScreen>
           _buildSubtitle('PARO EDITION', fire: true, fontSize: 20),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _buildMascot(),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               const Text(
                 'je l\'ai entendu faire prout..',
                 style: TextStyle(
@@ -2147,22 +2150,24 @@ class _ListenScreenState extends State<ListenScreen>
                     ),
                   ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
-                  // La fête : néons de toutes les couleurs pendant le flash.
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: AnimatedBuilder(
-                        animation: _flash,
-                        builder: (context, _) {
-                          if (!_flash.isAnimating) {
-                            return const SizedBox.shrink();
-                          }
-                          return CustomPaint(
-                            painter: _PartyPainter(_flash.value, _partySeed),
-                          );
-                        },
+                  // La fête : néons de toutes les couleurs tant que ça danse
+                  // (calé, beat en cours), dans les deux modes.
+                  if (_locked && _beatAnchor != null)
+                    Positioned.fill(
+                      child: IgnorePointer(
+                        child: ValueListenableBuilder<double>(
+                          valueListenable: _tick,
+                          builder: (context, t, _) {
+                            return CustomPaint(
+                              painter: _PartyPainter(
+                                (t - _partyStartedAt),
+                                _partySeed,
+                              ),
+                            );
+                          },
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
