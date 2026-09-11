@@ -97,10 +97,9 @@ fg_plain = Image.new("RGBA", (W, W), (0, 0, 0, 0))
 ZOOM = 1.0
 draw_dino(ImageDraw.Draw(fg_plain))
 fg_plain = fg_plain.resize((S, S), Image.LANCZOS)
-fg_small = fg_plain.resize((int(S * 0.80), int(S * 0.80)), Image.LANCZOS)
-adaptive = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-off = (S - fg_small.width) // 2
-adaptive.alpha_composite(fg_small, (off, off + 10))
+# Calque à 100 % : Android n'affiche que les 66 % centraux, donc la tête
+# déborde du disque et remplit tout, comme les icônes "plein cadre".
+adaptive = fg_plain.copy()
 adaptive.save("assets/icon/icon_fg.png")
 # Tête recadrée serrée, pour les O du titre et le bouton du mode secours.
 bbox = fg_plain.getbbox()
