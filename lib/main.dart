@@ -89,7 +89,7 @@ class TomatozorApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'TOMATOZOR',
+      title: 'TOMATOZOR Kevin Edition',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: kPink,
@@ -140,32 +140,35 @@ class GraffitiLetter extends StatelessWidget {
     required this.colors,
     this.strokeColor = Colors.black,
     this.shadowColor = const Color(0xFF1E0630),
+    this.fontSize = 72,
   });
   final String char;
   final List<Color> colors;
   final Color strokeColor;
   final Color shadowColor;
-
-  static const _style = TextStyle(
-    fontFamily: 'RubikSprayPaint',
-    fontSize: 72,
-    height: 1.0,
-  );
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
+    // Contour et ombre proportionnels à la taille.
+    final k = fontSize / 72;
+    final style = TextStyle(
+      fontFamily: 'RubikSprayPaint',
+      fontSize: fontSize,
+      height: 1.0,
+    );
     return Stack(
       children: [
         Transform.translate(
-          offset: const Offset(5, 7),
-          child: Text(char, style: _style.copyWith(color: shadowColor)),
+          offset: Offset(5 * k, 7 * k),
+          child: Text(char, style: style.copyWith(color: shadowColor)),
         ),
         Text(
           char,
-          style: _style.copyWith(
+          style: style.copyWith(
             foreground: Paint()
               ..style = PaintingStyle.stroke
-              ..strokeWidth = 9
+              ..strokeWidth = 9 * k
               ..strokeJoin = StrokeJoin.round
               ..color = strokeColor,
           ),
@@ -177,7 +180,7 @@ class GraffitiLetter extends StatelessWidget {
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ).createShader(rect),
-          child: Text(char, style: _style.copyWith(color: Colors.white)),
+          child: Text(char, style: style.copyWith(color: Colors.white)),
         ),
       ],
     );
@@ -677,9 +680,36 @@ class _ListenScreenState extends State<ListenScreen>
             ),
           ),
         ),
+        // "KEVIN EDITION" en petit sous le nom, même police, même style.
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final ch in 'KEVIN EDITION'.split(''))
+                  if (ch == ' ')
+                    const SizedBox(width: 12)
+                  else
+                    GraffitiLetter(
+                      ch,
+                      fontSize: 30,
+                      colors: fire ? kFire : const [Color(0xFFFFF0F8), kPink],
+                      strokeColor: fire
+                          ? const Color(0xFF3A0000)
+                          : Colors.black,
+                      shadowColor: fire
+                          ? const Color(0xFF2A0A00)
+                          : const Color(0xFF1E0630),
+                    ),
+              ],
+            ),
+          ),
+        ),
         if (fire)
           Padding(
-            padding: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.only(top: 2),
             child: Text(
               '⚠  MODE DE SECOURS  ⚠',
               style: Theme.of(context).textTheme.titleMedium?.copyWith(
