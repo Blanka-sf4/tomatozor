@@ -57,6 +57,26 @@ const kFireBackground = [
 const kYellowSign = Color(0xFFFFD600);
 const kGreenSign = Color(0xFF2ECC40);
 
+/// Le cri de la fête dépend du tempo trouvé. Le mode secours garde son
+/// cochon, signature du mode.
+class Animal {
+  const Animal(this.emoji, this.sound, this.ms);
+  final String emoji;
+  final String sound;
+
+  /// Durée du cri, pour que le dino hurle exactement pendant ce temps.
+  final int ms;
+}
+
+const kPig = Animal('🐷', 'sounds/oink.wav', 1660);
+
+Animal animalFor(double bpm) {
+  if (bpm < 100) return const Animal('🦕', 'sounds/burp.wav', 1700);
+  if (bpm < 160) return const Animal('🐴', 'sounds/sneeze.wav', 1850);
+  if (bpm < 220) return const Animal('🦖', 'sounds/roar.wav', 1900);
+  return const Animal('🐐', 'sounds/goat.wav', 1600);
+}
+
 /// Formate un BPM à la française : 172,2.
 String fmtBpm(double bpm) => bpm.toStringAsFixed(1).replaceAll('.', ',');
 
@@ -585,7 +605,7 @@ class _ListenScreenState extends State<ListenScreen>
 
     if (spread < 0.015) {
       _locked = true;
-      _celebrate();
+      _celebrate(animalFor(med));
       // On fige l'extrait avant de couper le micro.
       _saveClip(med);
       // Fixé : plus besoin d'écouter. Le bouton repasse en violet ; appuyer
@@ -663,7 +683,7 @@ class _ListenScreenState extends State<ListenScreen>
         // et le plus long intervalle.
         if (spread < 0.12) {
           _locked = true;
-          _celebrate();
+          _celebrate(kPig);
           _store.setLastTapBpm(bpm);
         }
       }
@@ -751,18 +771,11 @@ class _ListenScreenState extends State<ListenScreen>
     return 'head';
   }
 
-  Future<void> _celebrate() async {
+  Future<void> _celebrate(Animal animal) async {
     // Il hurle de joie pendant toute la durée du cri.
-    _setTemporaryFace(
-      'yell',
-      Duration(milliseconds: _mode == AppMode.tap ? 1700 : 1900),
-    );
+    _setTemporaryFace('yell', Duration(milliseconds: animal.ms));
     _flash.forward(from: 0);
-    // Cheval en mode normal, cochon en mode secours.
-    final sound = _mode == AppMode.tap
-        ? 'sounds/oink.wav'
-        : 'sounds/sneeze.wav';
-    unawaited(_player.play(AssetSource(sound)));
+    unawaited(_player.play(AssetSource(animal.sound)));
     // Deux secousses. Le paquet `vibration` pilote le moteur directement,
     // indépendamment du réglage "vibration au toucher" du téléphone.
     if (await Vibration.hasVibrator()) {
@@ -993,6 +1006,41 @@ class _ListenScreenState extends State<ListenScreen>
           child: RainbowText(text, style: style, shift: flashing ? t * 3 : 0),
         );
       },
+    );
+  }
+
+  /// « BPM », avec l'animal du tempo qui danse à côté une fois calé.
+  Widget _buildBpmLabel(ThemeData theme) {
+    final bpm = _displayBpm;
+    if (!_locked || bpm == null) {
+      return Text('BPM', style: theme.textTheme.titleLarge);
+    }
+    final animal = _mode == AppMode.tap ? kPig : animalFor(bpm);
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        ValueListenableBuilder<double>(
+          valueListenable: _pulse,
+          builder: (context, pulse, _) {
+            final side = _beatIndex.isEven ? 1.0 : -1.0;
+            return Transform.translate(
+              offset: Offset(0, -10 * pulse),
+              child: Transform.rotate(
+                angle: side * 0.35 * pulse,
+                child: Transform.scale(
+                  scale: 1 + 0.3 * pulse,
+                  child: Text(
+                    animal.emoji,
+                    style: const TextStyle(fontSize: 28),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+        const SizedBox(width: 10),
+        Text('BPM', style: theme.textTheme.titleLarge),
+      ],
     );
   }
 
@@ -1424,7 +1472,7 @@ class _ListenScreenState extends State<ListenScreen>
                               },
                             ),
                             title: Text(
-                              '${fmtBpm(e.bpm)} BPM',
+                              '${animalFor(e.bpm).emoji}  ${fmtBpm(e.bpm)} BPM',
                               style: const TextStyle(
                                 fontSize: 22,
                                 fontWeight: FontWeight.bold,
@@ -1721,7 +1769,7 @@ class _ListenScreenState extends State<ListenScreen>
                               _buildUnicorn(flip: true),
                           ],
                         ),
-                        Text('BPM', style: theme.textTheme.titleLarge),
+                        _buildBpmLabel(theme),
                         _buildBeatDot(),
                         _buildStatus(context),
                         const Spacer(),
