@@ -41,8 +41,9 @@ class HistoryStore {
   static const int defaultLatencyMs = 60;
   int latencyMs = defaultLatencyMs;
 
-  /// Dernier tempo réglé dans le mode métronome.
+  /// Dernier tempo réglé dans le mode métronome, et son son.
   double metroBpm = 120;
+  String metroSound = 'wood';
 
   Directory? _dir;
 
@@ -73,6 +74,7 @@ class HistoryStore {
       lastTapBpm = (j['lastTapBpm'] as num?)?.toDouble();
       latencyMs = (j['latencyMs'] as num?)?.toInt() ?? defaultLatencyMs;
       metroBpm = (j['metroBpm'] as num?)?.toDouble() ?? 120;
+      metroSound = (j['metroSound'] as String?) ?? 'wood';
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -88,6 +90,7 @@ class HistoryStore {
         'lastTapBpm': lastTapBpm,
         'latencyMs': latencyMs,
         'metroBpm': metroBpm,
+        'metroSound': metroSound,
       }),
     );
   }
@@ -111,6 +114,11 @@ class HistoryStore {
     entries.remove(entry);
     final f = File(entry.file);
     if (await f.exists()) await f.delete();
+    await _save();
+  }
+
+  Future<void> setMetroSound(String sound) async {
+    metroSound = sound;
     await _save();
   }
 

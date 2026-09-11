@@ -511,9 +511,9 @@ class _ListenScreenState extends State<ListenScreen>
     });
     _store.load().then((_) {
       _metro.setBpm(_store.metroBpm);
+      _metro.setSound(_store.metroSound);
       if (mounted) setState(() {});
     });
-    _metro.init();
     // Un bruit d'écrasement par personnage.
     for (final name in [
       'cat',
@@ -1273,21 +1273,7 @@ class _ListenScreenState extends State<ListenScreen>
               ),
             ),
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              _buildParadeItem('cat', 0),
-              const SizedBox(width: 10),
-              _buildParadeItem('unicorn', 1, tier: 2),
-              const SizedBox(width: 8),
-              _buildMascot(size: 100),
-              const SizedBox(width: 8),
-              _buildParadeItem('goat', 2, tier: 3),
-              const SizedBox(width: 10),
-              _buildParadeItem('dino', 3),
-            ],
-          ),
+          _buildMascot(size: 100),
         ] else ...[
           _buildSubtitle('PASTELLE EDITION', fire: fire),
           if (!fire) _buildMascot(),
@@ -1360,6 +1346,7 @@ class _ListenScreenState extends State<ListenScreen>
                       AppMode.metro => 'chicken',
                     }]
                     ?.start();
+                if (_mode == AppMode.metro) _selectMetroSound('chicken');
               },
               child: ValueListenableBuilder<double>(
                 valueListenable: _mascotSquish,
@@ -2398,7 +2385,9 @@ class _ListenScreenState extends State<ListenScreen>
             ],
           ),
           Text(
-            'BPM',
+            _metro.sound == 'wood'
+                ? 'BPM · clic bois'
+                : 'BPM · son : ${_soundLabel(_metro.sound)}',
             style: theme.textTheme.labelSmall?.copyWith(color: Colors.white70),
           ),
           SliderTheme(
@@ -2471,15 +2460,17 @@ class _ListenScreenState extends State<ListenScreen>
   /// tranche en cours), se balance au repos, cligne des yeux, et un tap
   /// l'écrase avec son bruit à lui.
   Widget _buildParadeItem(String name, int index, {int? tier}) {
-    const size = 48.0;
+    const size = 60.0;
     final squish = _paradeSquish.putIfAbsent(index, () => ValueNotifier(0));
     final currentTier = tierFor(_metro.bpm);
     final star = tier == currentTier;
+    final selected = _metro.sound == name;
 
     return GestureDetector(
       onTapDown: (_) {
         squish.value = 1;
         _squishPools[name]?.start();
+        _selectMetroSound(name);
       },
       child: ValueListenableBuilder<double>(
         valueListenable: _tick,
@@ -2492,8 +2483,8 @@ class _ListenScreenState extends State<ListenScreen>
           final blinking = (t + index) % (3.7 + index * 0.6) < 0.15;
           final Widget img = switch (name) {
             'dino' => DinoFace(face: 'head', size: size, blink: blinking),
-            'pig' => const Text('🐷', style: TextStyle(fontSize: 40)),
-            'unicorn' => const Text('🦄', style: TextStyle(fontSize: 40)),
+            'pig' => const Text('🐷', style: TextStyle(fontSize: 50)),
+            'unicorn' => const Text('🦄', style: TextStyle(fontSize: 50)),
             _ => Image.asset(
               'assets/images/${name}_${blinking ? (name == 'incog' ? 'peek' : 'blink') : 'normal'}.png',
               height: size,
@@ -2515,7 +2506,24 @@ class _ListenScreenState extends State<ListenScreen>
                     alignment: Alignment.bottomCenter,
                     child: child,
                   ),
-                  child: img,
+                  // L'animal dont le son est choisi a un halo.
+                  child: selected
+                      ? DecoratedBox(
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: kMetroAccents[currentTier].withValues(
+                                  alpha: 0.9,
+                                ),
+                                blurRadius: 22,
+                                spreadRadius: 6,
+                              ),
+                            ],
+                          ),
+                          child: img,
+                        )
+                      : img,
                 ),
               ),
             ),
@@ -2525,16 +2533,60 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
-  /// La parade du bas.
-  Widget _buildParade() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        _buildParadeItem('pig', 4, tier: 1),
-        _buildParadeItem('incog', 5),
-        _buildParadeItem('psyllo', 6),
-      ],
+  String _soundLabel(String name) => switch (name) {
+    'cat' => 'chat 🐱',
+    'incog' => 'incognito 🕵️',
+    'chicken' => 'poulet 🐔',
+    'dino' => 'dino 🦖',
+    'goat' => 'chèvre 🐐',
+    'pig' => 'cochon 🐷',
+    'unicorn' => 'licorne 🦄',
+    'psyllo' => 'Psyllo 🍄',
+    _ => name,
+  };
+
+  /// Un tap sur un animal choisit son son pour le métronome ; un second
+  /// tap sur le même revient au bois.
+  void _selectMetroSound(String name) {
+    final next = _metro.sound == name ? 'wood' : name;
+    _metro.setSound(next);
+    _store.setMetroSound(next);
+    setState(() {});
+  }
+
+  /// La scène du métronome : le panneau au centre, les animaux éparpillés
+  /// autour à des positions fixes (fractions de la zone), chacun penché
+  /// à sa façon pour casser l'alignement.
+  Widget _buildMetroScene(BuildContext context) {
+    // (nom, x, y, inclinaison en radians, tranche)
+    const spots = [
+      ('cat', 0.03, 0.02, -0.15, null),
+      ('unicorn', 0.84, 0.00, 0.2, 2),
+      ('goat', 0.00, 0.40, 0.12, 3),
+      ('dino', 0.86, 0.36, -0.1, null),
+      ('pig', 0.06, 0.80, -0.2, 1),
+      ('incog', 0.44, 0.84, 0.08, null),
+      ('psyllo', 0.80, 0.76, 0.18, null),
+    ];
+    return LayoutBuilder(
+      builder: (context, c) {
+        const item = 60.0;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Center(child: _buildMetroPanel(context)),
+            for (var i = 0; i < spots.length; i++)
+              Positioned(
+                left: spots[i].$2 * (c.maxWidth - item),
+                top: spots[i].$3 * (c.maxHeight - item),
+                child: Transform.rotate(
+                  angle: spots[i].$4,
+                  child: _buildParadeItem(spots[i].$1, i, tier: spots[i].$5),
+                ),
+              ),
+          ],
+        );
+      },
     );
   }
 
@@ -2584,8 +2636,7 @@ class _ListenScreenState extends State<ListenScreen>
                         const Spacer(),
 
                         if (_mode == AppMode.metro) ...[
-                          _buildMetroPanel(context),
-                          const Spacer(),
+                          Expanded(flex: 20, child: _buildMetroScene(context)),
                         ] else ...[
                           // --- Le gros chiffre, encadré par les licornes / flammes
                           Row(
@@ -2629,13 +2680,6 @@ class _ListenScreenState extends State<ListenScreen>
                   ),
                   if (_mode == AppMode.listen)
                     Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
-                  if (_mode == AppMode.metro)
-                    Positioned(
-                      left: 8,
-                      right: 56,
-                      bottom: 64,
-                      child: _buildParade(),
-                    ),
                   if (_mode != AppMode.metro)
                     Positioned(
                       left: 0,

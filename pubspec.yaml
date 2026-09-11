@@ -75,6 +75,22 @@ flutter:
     - assets/sounds/gloups.wav
     - assets/sounds/click.wav
     - assets/sounds/click_hi.wav
+    - assets/sounds/click_cat.wav
+    - assets/sounds/click_cat_hi.wav
+    - assets/sounds/click_incog.wav
+    - assets/sounds/click_incog_hi.wav
+    - assets/sounds/click_chicken.wav
+    - assets/sounds/click_chicken_hi.wav
+    - assets/sounds/click_dino.wav
+    - assets/sounds/click_dino_hi.wav
+    - assets/sounds/click_goat.wav
+    - assets/sounds/click_goat_hi.wav
+    - assets/sounds/click_pig.wav
+    - assets/sounds/click_pig_hi.wav
+    - assets/sounds/click_unicorn.wav
+    - assets/sounds/click_unicorn_hi.wav
+    - assets/sounds/click_psyllo.wav
+    - assets/sounds/click_psyllo_hi.wav
     - assets/sounds/cluck.wav
     - assets/sounds/squish_cat.wav
     - assets/sounds/squish_incog.wav

@@ -22,22 +22,42 @@ class Metronome {
   DateTime? _next;
   int _beat = 0;
 
+  /// Son courant : 'wood' (bois) ou le nom d'un animal.
+  String sound = 'wood';
+
   bool get running => _timer != null;
 
   /// Charge les deux clics dans des pools à faible latence.
-  Future<void> init() async {
+  Future<void> init() => setSound(sound);
+
+  /// Change le son (à chaud si ça tourne) : 'wood' → click.wav / click_hi.wav,
+  /// sinon `click_NOM.wav` / `click_NOM_hi.wav`.
+  Future<void> setSound(String name) async {
+    sound = name;
+    final base = name == 'wood' ? 'sounds/click' : 'sounds/click_$name';
     final ctx = AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers)
         .build();
-    _lo = await AudioPool.create(
-      source: AssetSource('sounds/click.wav'),
+    final lo = await AudioPool.create(
+      source: AssetSource('$base.wav'),
       maxPlayers: 4,
       audioContext: ctx,
     );
-    _hi = await AudioPool.create(
-      source: AssetSource('sounds/click_hi.wav'),
+    final hi = await AudioPool.create(
+      source: AssetSource('${base}_hi.wav'),
       maxPlayers: 2,
       audioContext: ctx,
     );
+    // Si un autre setSound a été appelé entre-temps, on jette celui-ci.
+    if (sound != name) {
+      await lo.dispose();
+      await hi.dispose();
+      return;
+    }
+    final oldLo = _lo, oldHi = _hi;
+    _lo = lo;
+    _hi = hi;
+    await oldLo?.dispose();
+    await oldHi?.dispose();
   }
 
   void start() {
