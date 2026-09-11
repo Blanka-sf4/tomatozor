@@ -579,7 +579,11 @@ class _ListenScreenState extends State<ListenScreen>
 
   Future<void> _celebrate() async {
     _flash.forward(from: 0);
-    unawaited(_player.play(AssetSource('sounds/sneeze.wav')));
+    // Cheval en mode normal, cochon en mode secours.
+    final sound = _mode == AppMode.tap
+        ? 'sounds/oink.wav'
+        : 'sounds/sneeze.wav';
+    unawaited(_player.play(AssetSource(sound)));
     // Deux secousses. Le paquet `vibration` pilote le moteur directement,
     // indépendamment du réglage "vibration au toucher" du téléphone.
     if (await Vibration.hasVibrator()) {

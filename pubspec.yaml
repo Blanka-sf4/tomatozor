@@ -63,6 +63,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/sounds/sneeze.wav
+    - assets/sounds/oink.wav
     - assets/images/dino_head.png
   fonts:
     - family: RubikSprayPaint
