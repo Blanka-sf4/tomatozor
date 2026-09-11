@@ -245,6 +245,7 @@ class _ListenScreenState extends State<ListenScreen>
   // --- Tête du dino -------------------------------------------------------------
   // normal | yark (saturation) | squish1..3 (écrasé pendant un tap)
   String _dinoFace = 'head';
+  bool _dinoPressed = false;
   final Random _rng = Random();
   String? _error;
 
@@ -365,6 +366,8 @@ class _ListenScreenState extends State<ListenScreen>
   void _switchMode() {
     _stop();
     _taps.clear();
+    _dinoFace = 'head';
+    _dinoPressed = false;
     setState(() {
       _mode = _mode == AppMode.listen ? AppMode.tap : AppMode.listen;
       _displayBpm = null;
@@ -446,7 +449,7 @@ class _ListenScreenState extends State<ListenScreen>
       setState(() {
         _locked = false;
         _saturated = false;
-        _dinoFace = 'head';
+        if (_mode == AppMode.listen) _dinoFace = 'head';
       });
     }
   }
@@ -985,19 +988,27 @@ class _ListenScreenState extends State<ListenScreen>
       };
     }
 
-    // En mode secours, tant que le doigt écrase le dino, il fait une tête
-    // (au hasard parmi trois) et s'aplatit ; il redevient normal au relâché.
+    // En mode secours, chaque tap donne au dino une nouvelle tête (au
+    // hasard parmi trois, jamais deux fois la même de suite) qu'il garde
+    // jusqu'au tap suivant. Il ne s'aplatit que pendant l'appui.
     void squish() {
       if (!tap) return;
-      setState(() => _dinoFace = 'squish${1 + _rng.nextInt(3)}');
+      var next = 'squish${1 + _rng.nextInt(3)}';
+      while (next == _dinoFace) {
+        next = 'squish${1 + _rng.nextInt(3)}';
+      }
+      setState(() {
+        _dinoFace = next;
+        _dinoPressed = true;
+      });
     }
 
     void unsquish() {
       if (!tap) return;
-      setState(() => _dinoFace = 'head');
+      setState(() => _dinoPressed = false);
     }
 
-    final squished = tap && _dinoFace.startsWith('squish');
+    final squished = tap && _dinoPressed;
 
     return GestureDetector(
       onTapDown: (_) {
