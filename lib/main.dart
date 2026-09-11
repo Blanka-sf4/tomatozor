@@ -405,7 +405,7 @@ class _ListenScreenState extends State<ListenScreen>
   // Écrasement de la mascotte quand on appuie dessus (1 = écrasée), et
   // son bruit rigolo (pool à faible latence).
   final ValueNotifier<double> _mascotSquish = ValueNotifier(0);
-  AudioPool? _squishPool;
+  final Map<AppMode, AudioPool> _squishPools = {};
 
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
@@ -512,13 +512,20 @@ class _ListenScreenState extends State<ListenScreen>
       if (mounted) setState(() {});
     });
     _metro.init();
-    AudioPool.create(
-      source: AssetSource('sounds/squish.wav'),
-      maxPlayers: 3,
-      audioContext: AudioContextConfig(
-        focus: AudioContextConfigFocus.mixWithOthers,
-      ).build(),
-    ).then((pool) => _squishPool = pool);
+    // Un bruit d'écrasement par mascotte.
+    for (final (mode, file) in [
+      (AppMode.listen, 'squish_cat'),
+      (AppMode.tap, 'squish_incog'),
+      (AppMode.metro, 'squish_chicken'),
+    ]) {
+      AudioPool.create(
+        source: AssetSource('sounds/$file.wav'),
+        maxPlayers: 2,
+        audioContext: AudioContextConfig(
+          focus: AudioContextConfigFocus.mixWithOthers,
+        ).build(),
+      ).then((pool) => _squishPools[mode] = pool);
+    }
     // Le chat t'accueille au lancement.
     Future.delayed(const Duration(milliseconds: 600), () {
       if (mounted) _greet();
@@ -584,7 +591,9 @@ class _ListenScreenState extends State<ListenScreen>
   void dispose() {
     _faceTimer?.cancel();
     _mascotSquish.dispose();
-    _squishPool?.dispose();
+    for (final p in _squishPools.values) {
+      p.dispose();
+    }
     _metro.dispose();
     _mascotTimer?.cancel();
     _mascotFrame.dispose();
@@ -1234,6 +1243,17 @@ class _ListenScreenState extends State<ListenScreen>
         // "PASTELLE EDITION" en petit sous le nom, même police, même style.
         if (_mode == AppMode.metro) ...[
           _buildSubtitle('METRONOME EDITION', fire: false),
+          const Padding(
+            padding: EdgeInsets.only(top: 2),
+            child: Text(
+              '🌭 mode mon cul sur la commode 🌭',
+              style: TextStyle(
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+                color: Color(0xFFE6C9FF),
+              ),
+            ),
+          ),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.end,
@@ -1315,7 +1335,7 @@ class _ListenScreenState extends State<ListenScreen>
             child: GestureDetector(
               onTapDown: (_) {
                 _mascotSquish.value = 1;
-                _squishPool?.start();
+                _squishPools[_mode]?.start();
               },
               child: ValueListenableBuilder<double>(
                 valueListenable: _mascotSquish,

@@ -76,7 +76,9 @@ flutter:
     - assets/sounds/click.wav
     - assets/sounds/click_hi.wav
     - assets/sounds/cluck.wav
-    - assets/sounds/squish.wav
+    - assets/sounds/squish_cat.wav
+    - assets/sounds/squish_incog.wav
+    - assets/sounds/squish_chicken.wav
     - assets/images/
   fonts:
     - family: RubikSprayPaint
