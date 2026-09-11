@@ -265,7 +265,9 @@ class _ListenScreenState extends State<ListenScreen>
       vsync: this,
       duration: const Duration(milliseconds: 2500),
     );
-    _ticker = createTicker(_onTick);
+    // Le ticker tourne en permanence : flammes, bannière néon, rebond du
+    // dino, point de beat. Coût négligeable, et ça simplifie la logique.
+    _ticker = createTicker(_onTick)..start();
     // Le son d'alerte ne doit pas couper la musique qui joue.
     _player.setAudioContext(
       AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers).build(),
@@ -308,11 +310,7 @@ class _ListenScreenState extends State<ListenScreen>
       _displayBpm = null;
       _lastResult = null;
     });
-    if (_mode == AppMode.tap) {
-      // Les flammes vacillent en permanence : le ticker tourne.
-      _ticker.start();
-      WakelockPlus.enable();
-    }
+    if (_mode == AppMode.tap) WakelockPlus.enable();
   }
 
   // --- Écoute (mode normal) ---------------------------------------------------------
@@ -346,7 +344,6 @@ class _ListenScreenState extends State<ListenScreen>
 
     // Garde l'écran allumé tant qu'on écoute.
     await WakelockPlus.enable();
-    if (!_ticker.isActive) _ticker.start();
 
     setState(() {
       _isListening = true;
@@ -377,7 +374,6 @@ class _ListenScreenState extends State<ListenScreen>
   Future<void> _stop() async {
     await _stopMic();
     await WakelockPlus.disable();
-    _ticker.stop();
     _pulse.value = 0;
     _beatAnchor = null;
     if (mounted) {
@@ -670,7 +666,7 @@ class _ListenScreenState extends State<ListenScreen>
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.only(top: 10),
+          padding: const EdgeInsets.only(top: 22),
           child: FittedBox(
             fit: BoxFit.contain,
             child: Row(
@@ -681,33 +677,8 @@ class _ListenScreenState extends State<ListenScreen>
           ),
         ),
         // "PASTELLE EDITION" en petit sous le nom, même police, même style.
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final ch in 'PASTELLE EDITION'.split(''))
-                  if (ch == ' ')
-                    const SizedBox(width: 12)
-                  else
-                    GraffitiLetter(
-                      ch,
-                      fontSize: 30,
-                      colors: fire ? kFire : const [Color(0xFFFFF0F8), kPink],
-                      strokeColor: fire
-                          ? const Color(0xFF3A0000)
-                          : Colors.black,
-                      shadowColor: fire
-                          ? const Color(0xFF2A0A00)
-                          : const Color(0xFF1E0630),
-                    ),
-              ],
-            ),
-          ),
-        ),
-        if (fire)
+        _buildSubtitle('PASTELLE EDITION', fire: fire),
+        if (fire) ...[
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text(
@@ -719,7 +690,70 @@ class _ListenScreenState extends State<ListenScreen>
               ),
             ),
           ),
+          _buildSubtitle('PARO EDITION', fire: true),
+        ],
       ],
+    );
+  }
+
+  /// Une ligne de sous-titre en petites lettres graffiti.
+  Widget _buildSubtitle(String text, {required bool fire}) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final ch in text.split(''))
+              if (ch == ' ')
+                const SizedBox(width: 12)
+              else
+                GraffitiLetter(
+                  ch,
+                  fontSize: 30,
+                  colors: fire ? kFire : const [Color(0xFFFFF0F8), kPink],
+                  strokeColor: fire ? const Color(0xFF3A0000) : Colors.black,
+                  shadowColor: fire
+                      ? const Color(0xFF2A0A00)
+                      : const Color(0xFF1E0630),
+                ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// La bannière néon du bas. Elle "respire" doucement, et flashe sur le
+  /// beat quand il y en a un.
+  Widget _buildNeonBanner() {
+    return ValueListenableBuilder<double>(
+      valueListenable: _tick,
+      builder: (context, t, _) {
+        final breath = 0.5 + 0.5 * sin(t * 2.2);
+        final beat = _beatAnchor == null ? 0.0 : _pulse.value;
+        final glow = 0.55 + 0.25 * breath + 0.4 * beat;
+        return FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Text(
+            'FAIT PÉTER LES GROS SONS !!!',
+            style: TextStyle(
+              fontFamily: 'RubikSprayPaint',
+              fontSize: 40,
+              height: 1.0,
+              color: const Color(0xFFFFF7B0),
+              shadows: [
+                Shadow(color: kPink.withValues(alpha: glow), blurRadius: 8),
+                Shadow(color: kPink.withValues(alpha: glow), blurRadius: 20),
+                Shadow(
+                  color: const Color(0xFFFF6A00).withValues(alpha: glow * 0.8),
+                  blurRadius: 40,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -799,7 +833,6 @@ class _ListenScreenState extends State<ListenScreen>
     } else {
       onTap = () {
         _dinoBounce.value = 1;
-        if (!_ticker.isActive) _ticker.start();
         _isListening ? _stop() : _start();
       };
     }
@@ -852,7 +885,10 @@ class _ListenScreenState extends State<ListenScreen>
         ];
       } else if (_taps.isEmpty) {
         lines = [
-          Text('Tape le dino en rythme', style: theme.textTheme.bodyLarge),
+          Text(
+            'Tape le dino en rythme régulier',
+            style: theme.textTheme.bodyLarge,
+          ),
         ];
       } else {
         lines = [
@@ -871,7 +907,12 @@ class _ListenScreenState extends State<ListenScreen>
         Text('Tape le dino pour recommencer', style: theme.textTheme.bodySmall),
       ];
     } else if (!_isListening) {
-      lines = [Text('Appuie sur le dino quand le son a pété', style: theme.textTheme.bodyLarge)];
+      lines = [
+        Text(
+          'Appuie sur le dino quand le son a pété',
+          style: theme.textTheme.bodyLarge,
+        ),
+      ];
     } else if (!_soundDetected) {
       lines = [
         Text('Micro ouvert, j\'écoute…', style: theme.textTheme.bodyLarge),
@@ -1018,7 +1059,7 @@ class _ListenScreenState extends State<ListenScreen>
         child: Stack(
           children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
               child: Column(
                 children: [
                   _buildHeader(context),
@@ -1055,6 +1096,8 @@ class _ListenScreenState extends State<ListenScreen>
                     _buildOptionsButton()
                   else
                     const SizedBox(height: 48),
+                  const SizedBox(height: 20),
+                  _buildNeonBanner(),
                   if (_error != null) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -1065,7 +1108,7 @@ class _ListenScreenState extends State<ListenScreen>
                 ],
               ),
             ),
-            Positioned(right: 4, bottom: 4, child: _buildModeToggle()),
+            Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
           ],
         ),
       ),
