@@ -10,6 +10,7 @@ import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'bpm_detector.dart';
+import 'dino.dart';
 import 'history.dart';
 
 // Paramètres audio, partagés avec le détecteur.
@@ -244,9 +245,19 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Tête du dino -------------------------------------------------------------
   // normal | yark (saturation) | squish1..3 (écrasé pendant un tap)
+  // _dinoFace = tête imposée (yark, squish*, yell, tongue). 'head' = pas
+  // d'imposition : la tête est déduite de la situation (voir _currentFace).
   String _dinoFace = 'head';
   bool _dinoPressed = false;
   final Random _rng = Random();
+  // Tête temporaire (hurlement de fête, langue tirée) : on retient celle
+  // d'avant pour la remettre ensuite.
+  Timer? _faceTimer;
+  String? _faceBefore;
+  // Clignement des yeux : instants du prochain et de la fin du courant.
+  final ValueNotifier<bool> _blink = ValueNotifier(false);
+  double _nextBlinkAt = 2.0;
+  double _blinkUntil = 0.0;
   String? _error;
 
   // Vu-mètre.
@@ -336,7 +347,17 @@ class _ListenScreenState extends State<ListenScreen>
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    for (final f in kAllFaces) {
+      precacheImage(AssetImage('assets/images/dino_$f.png'), context);
+    }
+  }
+
+  @override
   void dispose() {
+    _faceTimer?.cancel();
+    _blink.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _stop();
     _ticker.dispose();
@@ -675,7 +696,16 @@ class _ListenScreenState extends State<ListenScreen>
   }
 
   void _onTick(Duration elapsed) {
-    _tick.value = elapsed.inMicroseconds / 1e6;
+    final t = elapsed.inMicroseconds / 1e6;
+    _tick.value = t;
+    // Clignement : 130 ms, toutes les 3 à 6 s au hasard.
+    if (t >= _nextBlinkAt) {
+      _blinkUntil = t + 0.13;
+      _nextBlinkAt = t + 3 + _rng.nextDouble() * 3;
+      _blink.value = true;
+    } else if (_blink.value && t >= _blinkUntil) {
+      _blink.value = false;
+    }
     // Le rebond du dino retombe tout seul.
     if (_dinoBounce.value > 0) {
       _dinoBounce.value = max(0, _dinoBounce.value - 0.08);
@@ -692,7 +722,41 @@ class _ListenScreenState extends State<ListenScreen>
     _pulse.value = exp(-phase * 6);
   }
 
+  /// Impose une tête pendant [d], puis remet celle d'avant.
+  void _setTemporaryFace(String face, Duration d) {
+    _faceTimer?.cancel();
+    _faceBefore ??= _dinoFace;
+    setState(() => _dinoFace = face);
+    _faceTimer = Timer(d, () {
+      if (!mounted) return;
+      setState(() => _dinoFace = _faceBefore ?? 'head');
+      _faceBefore = null;
+    });
+  }
+
+  /// Easter egg : appui long sur le dino → langue tirée + pet.
+  void _easterEgg() {
+    _setTemporaryFace('tongue', const Duration(milliseconds: 1400));
+    unawaited(_player.play(AssetSource('sounds/fart.wav')));
+    Vibration.vibrate(duration: 60);
+  }
+
+  /// La tête déduite de la situation, quand aucune n'est imposée.
+  String _currentFace() {
+    if (_dinoFace != 'head') return _dinoFace;
+    if (_mode == AppMode.listen && _isListening && !_locked) {
+      if (!_soundDetected) return 'listen';
+      if (_lastResult == null && _dbLevel < -30) return 'huh';
+    }
+    return 'head';
+  }
+
   Future<void> _celebrate() async {
+    // Il hurle de joie pendant toute la durée du cri.
+    _setTemporaryFace(
+      'yell',
+      Duration(milliseconds: _mode == AppMode.tap ? 1700 : 1900),
+    );
     _flash.forward(from: 0);
     // Cheval en mode normal, cochon en mode secours.
     final sound = _mode == AppMode.tap
@@ -1010,6 +1074,14 @@ class _ListenScreenState extends State<ListenScreen>
 
     final squished = tap && _dinoPressed;
 
+    final face = _currentFace();
+    // Tête penchée quand il tend l'oreille.
+    final tilt = face == 'listen' ? -0.14 : 0.0;
+    // Pendant l'analyse, les pupilles sautent d'un côté à l'autre sur le
+    // beat ; une fois calé, c'est toute la tête qui hoche.
+    final analysing = !tap && _isListening && !_locked && _lastResult != null;
+    final nodding = !tap && _locked && _beatAnchor != null;
+
     return GestureDetector(
       onTapDown: (_) {
         squish();
@@ -1017,13 +1089,23 @@ class _ListenScreenState extends State<ListenScreen>
       },
       onTapUp: (_) => unsquish(),
       onTapCancel: unsquish,
+      onLongPress: _easterEgg,
       child: ValueListenableBuilder<double>(
-        valueListenable: _dinoBounce,
-        builder: (context, bounce, child) {
-          return Transform.scale(
-            scaleX: 1 + (squished ? 0.12 : 0.0),
-            scaleY: (1 - 0.15 * bounce) * (squished ? 0.82 : 1.0),
-            child: child,
+        valueListenable: _tick,
+        builder: (context, t, child) {
+          final bounce = _dinoBounce.value;
+          final pulse = _pulse.value;
+          final side = _beatIndex.isEven ? 1.0 : -1.0;
+          // Respiration : ±2 %, lente.
+          final breath = 1 + 0.02 * sin(t * 1.8);
+          final nod = nodding ? side * 0.09 * pulse : 0.0;
+          return Transform.rotate(
+            angle: tilt + nod,
+            child: Transform.scale(
+              scaleX: breath * (1 + (squished ? 0.12 : 0.0)),
+              scaleY: breath * (1 - 0.15 * bounce) * (squished ? 0.82 : 1.0),
+              child: child,
+            ),
           );
         },
         child: AnimatedContainer(
@@ -1040,10 +1122,25 @@ class _ListenScreenState extends State<ListenScreen>
               ),
             ],
           ),
-          child: Image.asset(
-            'assets/images/dino_$_dinoFace.png',
-            filterQuality: FilterQuality.medium,
-            gaplessPlayback: true,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _blink,
+            builder: (context, blink, _) {
+              return ValueListenableBuilder<double>(
+                valueListenable: _pulse,
+                builder: (context, pulse, _) {
+                  final side = _beatIndex.isEven ? 1.0 : -1.0;
+                  final pupil = analysing
+                      ? Offset(side * (0.35 + 0.65 * pulse), 0.15)
+                      : Offset.zero;
+                  return DinoFace(
+                    face: face,
+                    size: 180,
+                    pupil: pupil,
+                    blink: blink,
+                  );
+                },
+              );
+            },
           ),
         ),
       ),

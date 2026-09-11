@@ -56,8 +56,33 @@ def draw_dino(draw, expr="normal"):
     draw.ellipse(box(430, 620, 38, 28), fill=PINK_DEEP)
     draw.ellipse(box(594, 620, 38, 28), fill=PINK_DEEP)
 
+    # --- Sourcils (tête "j'écoute" : levés, intrigué) ---------------------
+    if expr in ("listen", "listen_noeyes"):
+        draw.arc(box(372, 330, 110, 45), start=200, end=340, fill=PINK_DEEP, width=16 * SS)
+        draw.arc(box(652, 315, 110, 45), start=200, end=340, fill=PINK_DEEP, width=16 * SS)
+
     # --- Bouche ---------------------------------------------------------
-    if expr == "yark":
+    if expr == "yell":
+        # Hurlement de joie : bouche énorme, langue au fond, dents en haut
+        draw.ellipse(box(512, 770, 230, 130), fill=PINK_DEEP)
+        draw.ellipse(box(512, 850, 110, 60), fill=TONGUE)
+        for x in range(330, 700, 62):
+            draw.polygon([p(x, 655), p(x + 50, 655), p(x + 25, 710)], fill=WHITE)
+    elif expr == "tongue":
+        # Langue tirée, bien au milieu, insolente
+        draw.chord(box(512, 640, 300, 190), start=15, end=165, fill=PINK_DEEP)
+        draw.chord(box(512, 600, 300, 190), start=15, end=165, fill=snout)
+        for x in range(250, 800, 62):
+            draw.polygon([p(x, 720), p(x + 50, 720), p(x + 25, 790)], fill=WHITE)
+        draw.ellipse(box(512, 840, 95, 120), fill=TONGUE)
+        draw.line([p(512, 760), p(512, 940)], fill=(190, 40, 80), width=6 * SS)
+    elif expr == "huh":
+        # "Hein ?" : petite bouche de travers
+        draw.ellipse(box(560, 775, 45, 32), fill=PINK_DEEP)
+    elif expr in ("listen", "listen_noeyes"):
+        # Petit sourire fermé, attentif
+        draw.arc(box(512, 720, 120, 70), start=20, end=160, fill=PINK_DEEP, width=14 * SS)
+    elif expr == "yark":
         # Grande bouche ouverte, langue pendante, dents en haut
         draw.ellipse(box(512, 760, 200, 110), fill=PINK_DEEP)
         draw.ellipse(box(512, 830, 90, 110), fill=TONGUE)
@@ -100,7 +125,22 @@ def draw_dino(draw, expr="normal"):
 
     # --- Yeux -----------------------------------------------------------
     for i, cx in enumerate((372, 652)):
-        if expr == "yark":
+        if expr in ("head_noeyes", "listen_noeyes"):
+            # Blanc de l'œil seul : l'appli dessine les pupilles elle-même
+            draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
+        elif expr == "yell":
+            # Yeux fermés de plaisir : ^ ^
+            draw.line([p(cx - 70, 470), p(cx, 410), p(cx + 70, 470)], fill=BLACK, width=20 * SS, joint="curve")
+        elif expr == "huh":
+            # Un œil plissé, l'autre normal mais petit
+            if i == 0:
+                draw.ellipse(box(cx, 440, 100, 55), fill=WHITE)
+                draw.line([p(cx - 80, 445), p(cx + 80, 445)], fill=BLACK, width=18 * SS)
+            else:
+                draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
+                draw.ellipse(box(cx, 452, 45, 48), fill=BLACK)
+                draw.ellipse(box(cx + 16, 438, 14, 14), fill=WHITE)
+        elif expr == "yark":
             # Yeux en croix : ><
             draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
             for dx, dy in ((-55, -55), (55, 55)):
@@ -176,7 +216,8 @@ sq.alpha_composite(head, ((side - head.width) // 2, (side - head.height) // 2))
 sq.resize((512, 512), Image.LANCZOS).save("assets/images/dino_head.png")
 
 # Les autres têtes, même recadrage (même bbox → même taille à l'écran).
-for expr in ("yark", "squish1", "squish2", "squish3"):
+for expr in ("yark", "squish1", "squish2", "squish3", "yell", "tongue", "huh",
+             "listen", "head_noeyes", "listen_noeyes"):
     layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
     draw_dino(ImageDraw.Draw(layer), expr)
     layer = layer.resize((S, S), Image.LANCZOS)
@@ -184,4 +225,20 @@ for expr in ("yark", "squish1", "squish2", "squish3"):
     sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
     sq.alpha_composite(head, ((side - head.width) // 2, (side - head.height) // 2))
     sq.resize((512, 512), Image.LANCZOS).save(f"assets/images/dino_{expr}.png")
-print("OK icon.png + icon_fg.png + dino_head.png + 4 expressions")
+# Géométrie des yeux dans l'image 512×512 finale, pour que l'appli place
+# les pupilles au bon endroit (dessinées par-dessus les têtes "_noeyes").
+scale = 512 / side
+ox = (side - head.width) // 2 - bbox[0]
+oy = (side - head.height) // 2 - bbox[1]
+import json
+eyes = {
+    "left": [round((372 + ox) * scale, 1), round((440 + oy) * scale, 1)],
+    "right": [round((652 + ox) * scale, 1), round((440 + oy) * scale, 1)],
+    "whiteRx": round(100 * scale, 1),
+    "whiteRy": round(105 * scale, 1),
+    "pupilR": round(64 * scale, 1),
+    "pupilDy": round(12 * scale, 1),
+}
+json.dump(eyes, open("assets/images/dino_eyes.json", "w"), indent=2)
+print("yeux :", eyes)
+print("OK icon.png + icon_fg.png + dino_head.png + 10 expressions")
