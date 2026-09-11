@@ -50,3 +50,6 @@ app.*.map.json
 # Clé de signature release : JAMAIS dans git
 android/keystore/
 android/key.properties
+
+# Les APK sont publiés sur GitHub Releases, pas dans git
+releases/*.apk

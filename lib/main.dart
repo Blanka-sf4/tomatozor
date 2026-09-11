@@ -58,7 +58,7 @@ const kFireBackground = [
 
 /// Lien de téléchargement de l'appli, inclus dans le texte de partage.
 /// À REMPLIR quand l'APK sera hébergé (GitHub Releases, Drive…).
-const kDownloadUrl = 'https://LIEN-A-VENIR';
+const kDownloadUrl = 'https://github.com/Blanka-sf4/tomatozor/releases/latest';
 
 const kYellowSign = Color(0xFFFFD600);
 const kGreenSign = Color(0xFF2ECC40);
