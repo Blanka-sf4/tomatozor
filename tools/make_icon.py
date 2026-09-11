@@ -32,8 +32,13 @@ def box(cx, cy, rx, ry):
     return [p(cx - rx, cy - ry), p(cx + rx, cy + ry)]
 
 
-def draw_dino(draw, margin=0):
-    """margin : réduction homothétique (0 = plein cadre)."""
+GREEN = (150, 225, 150)
+TONGUE = (235, 70, 110)
+SWEAT = (140, 200, 255)
+
+
+def draw_dino(draw, expr="normal"):
+    """expr : normal | yark (dégoûté, saturation) | squish1..3 (écrasé, tap)."""
     # Épines : dessinées d'abord, la tête vient par-dessus.
     for i, x in enumerate(range(150, 900, 105)):
         h = 130 if i % 2 == 0 else 95
@@ -44,26 +49,87 @@ def draw_dino(draw, margin=0):
     draw.ellipse(box(360, 400, 150, 70), fill=PINK_DARK)
     draw.ellipse(box(664, 400, 150, 70), fill=PINK_DARK)
     draw.ellipse(box(512, 520, 480, 380), fill=PINK)  # recouvre le bas des arcades
-    # Museau, plus clair
-    draw.ellipse(box(512, 660, 300, 190), fill=PINK_LIGHT)
+    # Museau, plus clair (verdâtre quand il a la nausée)
+    snout = GREEN if expr == "yark" else PINK_LIGHT
+    draw.ellipse(box(512, 660, 300, 190), fill=snout)
     # Narines
     draw.ellipse(box(430, 620, 38, 28), fill=PINK_DEEP)
     draw.ellipse(box(594, 620, 38, 28), fill=PINK_DEEP)
-    # Bouche : large sourire, bande sombre en arc
-    draw.chord(box(512, 640, 300, 190), start=15, end=165, fill=PINK_DEEP)
-    draw.chord(box(512, 600, 300, 190), start=15, end=165, fill=PINK_LIGHT)
-    # Dents : triangles pointant vers le bas le long de la lèvre supérieure
-    for x in range(250, 800, 62):
-        draw.polygon([p(x, 720), p(x + 50, 720), p(x + 25, 790)], fill=WHITE)
+
+    # --- Bouche ---------------------------------------------------------
+    if expr == "yark":
+        # Grande bouche ouverte, langue pendante, dents en haut
+        draw.ellipse(box(512, 760, 200, 110), fill=PINK_DEEP)
+        draw.ellipse(box(512, 830, 90, 110), fill=TONGUE)
+        draw.line([p(512, 760), p(512, 920)], fill=(190, 40, 80), width=6 * SS)
+        for x in range(360, 680, 62):
+            draw.polygon([p(x, 665), p(x + 50, 665), p(x + 25, 720)], fill=WHITE)
+    elif expr == "squish1":
+        # Bouche en "O" surpris
+        draw.ellipse(box(512, 770, 90, 100), fill=PINK_DEEP)
+        draw.ellipse(box(512, 800, 55, 55), fill=TONGUE)
+    elif expr == "squish2":
+        # Sourire de travers, langue qui sort sur le côté
+        draw.chord(box(512, 640, 300, 190), start=15, end=165, fill=PINK_DEEP)
+        draw.chord(box(512, 600, 300, 190), start=15, end=165, fill=snout)
+        for x in range(250, 800, 62):
+            draw.polygon([p(x, 720), p(x + 50, 720), p(x + 25, 790)], fill=WHITE)
+        draw.ellipse(box(690, 800, 70, 60), fill=TONGUE)
+        draw.line([p(690, 760), p(690, 850)], fill=(190, 40, 80), width=5 * SS)
+    elif expr == "squish3":
+        # Bouche plate, dents serrées
+        draw.rectangle([p(300, 730), p(724, 800)], fill=PINK_DEEP)
+        for x in range(310, 720, 52):
+            draw.polygon([p(x, 730), p(x + 44, 730), p(x + 22, 770)], fill=WHITE)
+            draw.polygon([p(x, 800), p(x + 44, 800), p(x + 22, 760)], fill=WHITE)
+        # Goutte de sueur
+        draw.ellipse(box(820, 330, 22, 30), fill=SWEAT)
+        draw.polygon([p(798, 322), p(842, 322), p(820, 280)], fill=SWEAT)
+    else:
+        # Sourire normal
+        draw.chord(box(512, 640, 300, 190), start=15, end=165, fill=PINK_DEEP)
+        draw.chord(box(512, 600, 300, 190), start=15, end=165, fill=snout)
+        for x in range(250, 800, 62):
+            draw.polygon([p(x, 720), p(x + 50, 720), p(x + 25, 790)], fill=WHITE)
+
     # Joues
-    draw.ellipse(box(150, 590, 60, 45), fill=PINK_LIGHT)
-    draw.ellipse(box(874, 590, 60, 45), fill=PINK_LIGHT)
-    # Yeux : blanc, pupille centrée (regard vers l'utilisateur), reflet
-    for cx in (372, 652):
-        draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
-        draw.ellipse(box(cx, 452, 62, 66), fill=BLACK)
-        draw.ellipse(box(cx + 22, 428, 22, 22), fill=WHITE)
-        draw.ellipse(box(cx - 18, 478, 9, 9), fill=WHITE)
+    cheek = GREEN if expr == "yark" else PINK_LIGHT
+    cheek_r = 80 if expr == "squish1" else 60
+    draw.ellipse(box(150, 590, cheek_r, cheek_r * 0.75), fill=cheek)
+    draw.ellipse(box(874, 590, cheek_r, cheek_r * 0.75), fill=cheek)
+
+    # --- Yeux -----------------------------------------------------------
+    for i, cx in enumerate((372, 652)):
+        if expr == "yark":
+            # Yeux en croix : ><
+            draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
+            for dx, dy in ((-55, -55), (55, 55)):
+                draw.line([p(cx - dx, 440 - dy), p(cx + dx, 440 + dy)], fill=BLACK, width=22 * SS)
+            for dx, dy in ((-55, 55), (55, -55)):
+                draw.line([p(cx - dx, 440 - dy), p(cx + dx, 440 + dy)], fill=BLACK, width=22 * SS)
+        elif expr == "squish1":
+            # Yeux exorbités, pupilles qui partent chacune de leur côté
+            draw.ellipse(box(cx, 440, 125, 130), fill=WHITE)
+            off = -35 if i == 0 else 35
+            draw.ellipse(box(cx + off, 455, 45, 48), fill=BLACK)
+            draw.ellipse(box(cx + off + 14, 440, 14, 14), fill=WHITE)
+        elif expr == "squish2":
+            if i == 0:
+                # Clin d'œil : arc épais
+                draw.arc(box(cx, 460, 90, 60), start=200, end=340, fill=BLACK, width=20 * SS)
+            else:
+                draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
+                draw.ellipse(box(cx, 452, 62, 66), fill=BLACK)
+                draw.ellipse(box(cx + 22, 428, 22, 22), fill=WHITE)
+        elif expr == "squish3":
+            # Yeux plissés : traits
+            draw.ellipse(box(cx, 440, 100, 60), fill=WHITE)
+            draw.line([p(cx - 80, 445), p(cx + 80, 445)], fill=BLACK, width=18 * SS)
+        else:
+            draw.ellipse(box(cx, 440, 100, 105), fill=WHITE)
+            draw.ellipse(box(cx, 452, 62, 66), fill=BLACK)
+            draw.ellipse(box(cx + 22, 428, 22, 22), fill=WHITE)
+            draw.ellipse(box(cx - 18, 478, 9, 9), fill=WHITE)
 
 
 # --- calque dino, fond transparent ----------------------------------------
@@ -108,4 +174,14 @@ side = max(head.size) + 20
 sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
 sq.alpha_composite(head, ((side - head.width) // 2, (side - head.height) // 2))
 sq.resize((512, 512), Image.LANCZOS).save("assets/images/dino_head.png")
-print("OK icon.png + icon_fg.png + dino_head.png")
+
+# Les autres têtes, même recadrage (même bbox → même taille à l'écran).
+for expr in ("yark", "squish1", "squish2", "squish3"):
+    layer = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+    draw_dino(ImageDraw.Draw(layer), expr)
+    layer = layer.resize((S, S), Image.LANCZOS)
+    head = layer.crop(bbox)
+    sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    sq.alpha_composite(head, ((side - head.width) // 2, (side - head.height) // 2))
+    sq.resize((512, 512), Image.LANCZOS).save(f"assets/images/dino_{expr}.png")
+print("OK icon.png + icon_fg.png + dino_head.png + 4 expressions")

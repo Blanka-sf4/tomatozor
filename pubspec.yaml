@@ -65,7 +65,8 @@ flutter:
   assets:
     - assets/sounds/sneeze.wav
     - assets/sounds/oink.wav
-    - assets/images/dino_head.png
+    - assets/sounds/yark.wav
+    - assets/images/
   fonts:
     - family: RubikSprayPaint
       fonts:

@@ -232,6 +232,20 @@ class _ListenScreenState extends State<ListenScreen>
   bool _isListening = false;
   // Vrai dès que le micro a capté un vrai signal (> -45 dB) depuis le start.
   bool _soundDetected = false;
+
+  // --- Saturation ------------------------------------------------------------
+  // On compte les échantillons en butée (|s| ≥ 32700) sur chaque fenêtre
+  // d'estimation (0,5 s). Plus de 1 % = le micro sature : le son est
+  // écrasé, les attaques disparaissent, le calage serait faux → bloqué.
+  int _clippedInWindow = 0;
+  int _samplesInWindow = 0;
+  bool _saturated = false;
+  DateTime _lastYark = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // --- Tête du dino -------------------------------------------------------------
+  // normal | yark (saturation) | squish1..3 (écrasé pendant un tap)
+  String _dinoFace = 'head';
+  final Random _rng = Random();
   String? _error;
 
   // Vu-mètre.
@@ -374,6 +388,10 @@ class _ListenScreenState extends State<ListenScreen>
     _beatAnchor = null;
     _clipWrite = 0;
     _clipFilled = 0;
+    _clippedInWindow = 0;
+    _samplesInWindow = 0;
+    _saturated = false;
+    _dinoFace = 'head';
 
     final stream = await _recorder.startStream(
       const RecordConfig(
@@ -425,7 +443,11 @@ class _ListenScreenState extends State<ListenScreen>
     _pulse.value = 0;
     _beatAnchor = null;
     if (mounted) {
-      setState(() => _locked = false);
+      setState(() {
+        _locked = false;
+        _saturated = false;
+        _dinoFace = 'head';
+      });
     }
   }
 
@@ -441,11 +463,15 @@ class _ListenScreenState extends State<ListenScreen>
     }
     _clipFilled = min(_clipFilled + samples.length, _clipSamples);
 
-    // 2. Vu-mètre (RMS → dB).
+    // 2. Vu-mètre (RMS → dB) et comptage de la saturation.
     double sumSquares = 0;
+    var clipped = 0;
     for (final s in samples) {
       sumSquares += s * s;
+      if (s >= 32700 || s <= -32700) clipped++;
     }
+    _clippedInWindow += clipped;
+    _samplesInWindow += samples.length;
     final rms = sqrt(sumSquares / samples.length);
     final db = 20 * log10(max(rms, 1.0) / 32768.0);
     final level = ((db + 60) / 60).clamp(0.0, 1.0);
@@ -455,6 +481,7 @@ class _ListenScreenState extends State<ListenScreen>
     BpmResult? result;
     if (_samplesSinceEstimate >= _estimateEvery) {
       _samplesSinceEstimate = 0;
+      _updateSaturation();
       result = _detector.estimate();
       if (result != null) {
         _logResult(result);
@@ -501,7 +528,33 @@ class _ListenScreenState extends State<ListenScreen>
     return sorted[sorted.length ~/ 2];
   }
 
+  /// Fin de fenêtre : le micro sature-t-il ? Entrée en saturation = le
+  /// dino a la nausée + « yark » (pas plus d'une fois toutes les 4 s).
+  void _updateSaturation() {
+    final ratio = _samplesInWindow == 0
+        ? 0.0
+        : _clippedInWindow / _samplesInWindow;
+    _clippedInWindow = 0;
+    _samplesInWindow = 0;
+    final now = _saturated;
+    _saturated = ratio > 0.01;
+    if (_saturated && !now) {
+      // On repart de zéro : les estimations faites sur du son écrasé ne
+      // valent rien, il faudra 3,5 s de son propre avant un calage.
+      _history.clear();
+      _dinoFace = 'yark';
+      final t = DateTime.now();
+      if (t.difference(_lastYark).inSeconds >= 4) {
+        _lastYark = t;
+        unawaited(_player.play(AssetSource('sounds/yark.wav')));
+      }
+    } else if (!_saturated && now) {
+      _dinoFace = 'head';
+    }
+  }
+
   void _updateLock() {
+    if (_saturated) return;
     if (_history.length < _historyLength) return;
     final med = _median(_history);
     final spread = (_history.reduce(max) - _history.reduce(min)) / med;
@@ -913,7 +966,9 @@ class _ListenScreenState extends State<ListenScreen>
     final tap = _mode == AppMode.tap;
     final active = tap || _isListening;
     final Color glow;
-    if (tap) {
+    if (_saturated && _isListening) {
+      glow = kAlertRed;
+    } else if (tap) {
       glow = const Color(0xFFFF6A00);
     } else if (_isListening) {
       glow = kPink;
@@ -930,12 +985,35 @@ class _ListenScreenState extends State<ListenScreen>
       };
     }
 
+    // En mode secours, tant que le doigt écrase le dino, il fait une tête
+    // (au hasard parmi trois) et s'aplatit ; il redevient normal au relâché.
+    void squish() {
+      if (!tap) return;
+      setState(() => _dinoFace = 'squish${1 + _rng.nextInt(3)}');
+    }
+
+    void unsquish() {
+      if (!tap) return;
+      setState(() => _dinoFace = 'head');
+    }
+
+    final squished = tap && _dinoFace.startsWith('squish');
+
     return GestureDetector(
-      onTapDown: (_) => onTap(),
+      onTapDown: (_) {
+        squish();
+        onTap();
+      },
+      onTapUp: (_) => unsquish(),
+      onTapCancel: unsquish,
       child: ValueListenableBuilder<double>(
         valueListenable: _dinoBounce,
         builder: (context, bounce, child) {
-          return Transform.scale(scale: 1 - 0.15 * bounce, child: child);
+          return Transform.scale(
+            scaleX: 1 + (squished ? 0.12 : 0.0),
+            scaleY: (1 - 0.15 * bounce) * (squished ? 0.82 : 1.0),
+            child: child,
+          );
         },
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 300),
@@ -952,8 +1030,9 @@ class _ListenScreenState extends State<ListenScreen>
             ],
           ),
           child: Image.asset(
-            'assets/images/dino_head.png',
+            'assets/images/dino_$_dinoFace.png',
             filterQuality: FilterQuality.medium,
+            gaplessPlayback: true,
           ),
         ),
       ),
@@ -999,12 +1078,40 @@ class _ListenScreenState extends State<ListenScreen>
           style: theme.textTheme.bodyLarge,
         ),
       ];
+    } else if (_saturated) {
+      lines = [
+        const Text(
+          'ÇA SATURE ! Éloigne le téléphone',
+          style: TextStyle(
+            color: kAlertRed,
+            fontWeight: FontWeight.w900,
+            fontSize: 16,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Pas de calage tant que le son est écrasé',
+          style: theme.textTheme.bodySmall,
+        ),
+      ];
     } else if (!_soundDetected) {
       lines = [
         Text('Micro ouvert, j\'écoute…', style: theme.textTheme.bodyLarge),
         const SizedBox(height: 4),
         Text(
           'Aucun son pour l\'instant (${_dbLevel.toStringAsFixed(0)} dB)',
+          style: theme.textTheme.bodySmall,
+        ),
+      ];
+    } else if (_dbLevel < -30 && result == null) {
+      lines = [
+        Text(
+          'Balance le son, sois pas timide !',
+          style: theme.textTheme.bodyLarge,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Son faible (${_dbLevel.toStringAsFixed(0)} dB) · analyse… ${buffered.toStringAsFixed(1)} s',
           style: theme.textTheme.bodySmall,
         ),
       ];
