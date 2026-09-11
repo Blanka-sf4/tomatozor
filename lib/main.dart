@@ -871,7 +871,7 @@ class _ListenScreenState extends State<ListenScreen>
         Text('Tape le dino pour recommencer', style: theme.textTheme.bodySmall),
       ];
     } else if (!_isListening) {
-      lines = [Text('Appuie sur le dino', style: theme.textTheme.bodyLarge)];
+      lines = [Text('Appuie sur le dino quand le son a pété', style: theme.textTheme.bodyLarge)];
     } else if (!_soundDetected) {
       lines = [
         Text('Micro ouvert, j\'écoute…', style: theme.textTheme.bodyLarge),
