@@ -356,7 +356,7 @@ class ListenScreen extends StatefulWidget {
 }
 
 class _ListenScreenState extends State<ListenScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   AppMode _mode = AppMode.listen;
 
   final AudioRecorder _recorder = AudioRecorder();
