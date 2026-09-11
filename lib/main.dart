@@ -448,8 +448,9 @@ class _ListenScreenState extends State<ListenScreen>
   final List<DateTime> _taps = [];
   static const int _tapsNeeded = 8;
   static const Duration _tapTimeout = Duration(seconds: 2);
-  // Rebond du dino à chaque tap.
+  // Rebond du dino à chaque tap, et chrono de l'appui long (easter egg).
   final ValueNotifier<double> _dinoBounce = ValueNotifier(0);
+  Timer? _longPressTimer;
   // Instant du calage au tap : pendant 3 s, impossible de relancer.
   DateTime? _tapLockedAt;
   static const Duration _tapLockHold = Duration(seconds: 3);
@@ -599,6 +600,7 @@ class _ListenScreenState extends State<ListenScreen>
   @override
   void dispose() {
     _faceTimer?.cancel();
+    _longPressTimer?.cancel();
     _mascotSquish.dispose();
     for (final n in _paradeSquish.values) {
       n.dispose();
@@ -851,7 +853,10 @@ class _ListenScreenState extends State<ListenScreen>
           (c) => '${c.bpm.toStringAsFixed(1)}(${c.score.toStringAsFixed(2)})',
         )
         .join(' ');
-    debugPrint(
+    // print et pas debugPrint : on veut la trace aussi en version release,
+    // pour calibrer sur de vraies sessions.
+    // ignore: avoid_print
+    print(
       'BPM ${result.bpm.toStringAsFixed(1)} '
       'conf ${result.confidence.toStringAsFixed(2)} '
       'range ${kRanges[_rangeIndex].label} '
@@ -1590,14 +1595,26 @@ class _ListenScreenState extends State<ListenScreen>
     final analysing = !tap && _isListening && !_locked && _lastResult != null;
     final nodding = _locked && _beatAnchor != null;
 
-    final dino = GestureDetector(
-      onTapDown: (_) {
+    // Listener plutôt que GestureDetector : l'événement brut du doigt,
+    // sans délai d'arbitrage (jusqu'à 100 ms quand un appui long est aussi
+    // possible) et sans annulation si le doigt glisse. Pour le tap tempo,
+    // c'est la différence entre "ça rate" et "ça répond".
+    final dino = Listener(
+      behavior: HitTestBehavior.opaque,
+      onPointerDown: (_) {
         squish();
         onTap();
+        _longPressTimer?.cancel();
+        _longPressTimer = Timer(const Duration(milliseconds: 600), _easterEgg);
       },
-      onTapUp: (_) => unsquish(),
-      onTapCancel: unsquish,
-      onLongPress: _easterEgg,
+      onPointerUp: (_) {
+        unsquish();
+        _longPressTimer?.cancel();
+      },
+      onPointerCancel: (_) {
+        unsquish();
+        _longPressTimer?.cancel();
+      },
       child: ValueListenableBuilder<double>(
         valueListenable: _tick,
         builder: (context, t, child) {
@@ -2406,13 +2423,17 @@ class _ListenScreenState extends State<ListenScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              OutlinedButton.icon(
-                onPressed: _metroTap,
-                icon: const Icon(Icons.touch_app),
-                label: const Text('TAP'),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  side: BorderSide(color: accent, width: 2),
+              Listener(
+                behavior: HitTestBehavior.opaque,
+                onPointerDown: (_) => _metroTap(),
+                child: OutlinedButton.icon(
+                  onPressed: () {}, // géré par le Listener, sans délai
+                  icon: const Icon(Icons.touch_app),
+                  label: const Text('TAP'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: BorderSide(color: accent, width: 2),
+                  ),
                 ),
               ),
               const SizedBox(width: 12),
