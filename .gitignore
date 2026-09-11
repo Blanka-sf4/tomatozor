@@ -46,3 +46,7 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Clé de signature release : JAMAIS dans git
+android/keystore/
+android/key.properties

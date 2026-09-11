@@ -212,17 +212,15 @@ int tierFor(double bpm) =>
     bpm < 100 ? 0 : (bpm < 160 ? 1 : (bpm < 220 ? 2 : 3));
 
 /// Les quatre atmosphères du métronome, une par tranche.
-const kMetroBackgrounds = [
-  [Color(0xFF050A2A), Color(0xFF16205C), Color(0xFF2B2A7A)], // nuit bleue
-  [Color(0xFF3A0F3F), Color(0xFF7B2C6B), Color(0xFFB03A8C)], // rose profond
-  kFireBackground, // braises
-  [
-    Color(0xFF000000),
-    Color(0xFF3A0040),
-    Color(0xFFB000A0),
-    Color(0xFF000000),
-  ], // magenta
+/// Fond du métronome : violet psychédélique, champignons.
+const kMetroBackground = [
+  Color(0xFF12002A),
+  Color(0xFF3B0A6B),
+  Color(0xFF7A1FB8),
+  Color(0xFF3B0A6B),
+  Color(0xFF12002A),
 ];
+
 const kMetroAccents = [
   Color(0xFF6FA8FF),
   kPink,
@@ -404,6 +402,9 @@ class _ListenScreenState extends State<ListenScreen>
   double _nextMascotEventAt = 1.5;
   double _mascotEventUntil = 0.0;
 
+  // Écrasement de la mascotte quand on appuie dessus (1 = écrasée).
+  final ValueNotifier<double> _mascotSquish = ValueNotifier(0);
+
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
   double _nextBlinkAt = 2.0;
@@ -563,6 +564,8 @@ class _ListenScreenState extends State<ListenScreen>
       'chicken_normal',
       'chicken_blink',
       'chicken_cluck',
+      'psyllo_normal',
+      'psyllo_blink',
     ]) {
       precacheImage(AssetImage('assets/images/$f.png'), context);
     }
@@ -571,6 +574,7 @@ class _ListenScreenState extends State<ListenScreen>
   @override
   void dispose() {
     _faceTimer?.cancel();
+    _mascotSquish.dispose();
     _metro.dispose();
     _mascotTimer?.cancel();
     _mascotFrame.dispose();
@@ -606,8 +610,10 @@ class _ListenScreenState extends State<ListenScreen>
     _setMode(_mode == AppMode.listen ? AppMode.tap : AppMode.listen);
   }
 
-  void _setMode(AppMode mode) {
-    _stop();
+  Future<void> _setMode(AppMode mode) async {
+    // On attend la fin de _stop() : sinon son "relâche l'écran" arrivait
+    // après notre "garde l'écran", et l'écran s'éteignait en mode métronome.
+    await _stop();
     _metro.stop();
     _taps.clear();
     _dinoFace = 'head';
@@ -641,6 +647,7 @@ class _ListenScreenState extends State<ListenScreen>
       _partySeed = _rng.nextInt(1 << 30);
       _partyStartedAt = _tick.value;
       _metro.start();
+      WakelockPlus.enable();
       setState(() => _locked = true);
     }
   }
@@ -736,7 +743,8 @@ class _ListenScreenState extends State<ListenScreen>
   /// Arrêt complet : micro, horloge du beat, écran libre.
   Future<void> _stop() async {
     await _stopMic();
-    await WakelockPlus.disable();
+    // En mode secours et métronome, l'écran reste allumé quoi qu'il arrive.
+    if (_mode == AppMode.listen) await WakelockPlus.disable();
     _pulse.value = 0;
     _beatAnchor = null;
     if (mounted) {
@@ -1039,9 +1047,12 @@ class _ListenScreenState extends State<ListenScreen>
         if (_mascotFrame.value != idle) _mascotFrame.value = idle;
       }
     }
-    // Le rebond du dino retombe tout seul.
+    // Le rebond du dino et l'écrasement de la mascotte retombent tout seuls.
     if (_dinoBounce.value > 0) {
       _dinoBounce.value = max(0, _dinoBounce.value - 0.08);
+    }
+    if (_mascotSquish.value > 0) {
+      _mascotSquish.value = max(0, _mascotSquish.value - 0.06);
     }
 
     final anchor = _beatAnchor;
@@ -1276,11 +1287,24 @@ class _ListenScreenState extends State<ListenScreen>
                 child: Transform.rotate(angle: angle, child: child),
               );
             },
-            child: Image.asset(
-              'assets/images/$frame.png',
-              height: size,
-              filterQuality: FilterQuality.medium,
-              gaplessPlayback: true,
+            // Un appui l'écrase (squish), il reprend sa forme tout seul.
+            child: GestureDetector(
+              onTapDown: (_) => _mascotSquish.value = 1,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _mascotSquish,
+                builder: (context, sq, child) => Transform.scale(
+                  scaleX: 1 + 0.35 * sq,
+                  scaleY: 1 - 0.4 * sq,
+                  alignment: Alignment.bottomCenter,
+                  child: child,
+                ),
+                child: Image.asset(
+                  'assets/images/$frame.png',
+                  height: size,
+                  filterQuality: FilterQuality.medium,
+                  gaplessPlayback: true,
+                ),
+              ),
             ),
           );
         },
@@ -2235,6 +2259,59 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
+  /// Des champignons qui dérivent lentement dans le fond, à moitié
+  /// transparents, et qui tournent : l'ambiance psyché.
+  Widget _buildMushroomDrift() {
+    return Positioned.fill(
+      child: IgnorePointer(
+        child: ValueListenableBuilder<double>(
+          valueListenable: _tick,
+          builder: (context, t, _) {
+            return LayoutBuilder(
+              builder: (context, c) {
+                final rng = Random(77);
+                return Stack(
+                  children: [
+                    for (var i = 0; i < 9; i++)
+                      Builder(
+                        builder: (_) {
+                          final speed = 0.02 + rng.nextDouble() * 0.03;
+                          final x0 = rng.nextDouble();
+                          final phase = rng.nextDouble() * 6.28;
+                          final size = 28 + rng.nextDouble() * 30;
+                          final y =
+                              ((1 - ((t * speed + rng.nextDouble()) % 1.0)) *
+                                  (c.maxHeight + 80)) -
+                              40;
+                          final x =
+                              (x0 + 0.06 * sin(t * 0.7 + phase)) *
+                              (c.maxWidth - size);
+                          return Positioned(
+                            left: x,
+                            top: y,
+                            child: Opacity(
+                              opacity: 0.35,
+                              child: Transform.rotate(
+                                angle: sin(t * 0.5 + phase) * 0.4,
+                                child: Text(
+                                  '🍄',
+                                  style: TextStyle(fontSize: size),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildMetroPanel(BuildContext context) {
     final theme = Theme.of(context);
     final bpm = _metro.bpm;
@@ -2358,7 +2435,14 @@ class _ListenScreenState extends State<ListenScreen>
       ),
     );
 
-    const animals = [
+    return panel;
+  }
+
+  /// La parade du bas : tous les personnages de l'appli, qui font la fête
+  /// quand le métronome tourne. Psyllo cligne des yeux de temps en temps.
+  Widget _buildParade() {
+    final tier = tierFor(_metro.bpm);
+    const emojis = [
       ('🦕', 0),
       ('🐴', 1),
       ('🦖', 2),
@@ -2366,19 +2450,54 @@ class _ListenScreenState extends State<ListenScreen>
       ('🐷', 1),
       ('🦄', 2),
     ];
-    Widget column(List<int> idx) => Column(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    const images = [
+      'dino_head',
+      'cat_normal',
+      'incog_normal',
+      'chicken_normal',
+      'psyllo_normal',
+    ];
+
+    Widget imageAnimal(String name, int index) {
+      return ValueListenableBuilder<double>(
+        valueListenable: _tick,
+        builder: (context, t, _) {
+          final pulse = _metro.running ? _pulse.value : 0.0;
+          final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
+          final amp = [0.35, 0.6, 0.85, 1.2][tier] * 0.7;
+          final sway = _metro.running ? 0.0 : 0.05 * sin(t * 1.5 + index);
+          // Psyllo cligne des yeux : 0,15 s toutes les ~4 s
+          final frame = name == 'psyllo_normal' && (t % 4.3) < 0.15
+              ? 'psyllo_blink'
+              : name;
+          return Transform.translate(
+            offset: Offset(0, -22 * amp * pulse),
+            child: Transform.rotate(
+              angle: side * 0.4 * amp * pulse + sway,
+              child: Transform.scale(
+                scale: 1 + 0.3 * amp * pulse,
+                child: Image.asset(
+                  'assets/images/$frame.png',
+                  height: 44,
+                  filterQuality: FilterQuality.medium,
+                  gaplessPlayback: true,
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    }
+
+    return Wrap(
+      alignment: WrapAlignment.center,
+      crossAxisAlignment: WrapCrossAlignment.end,
+      spacing: 6,
+      runSpacing: 8,
       children: [
-        for (final i in idx)
-          _buildPartyAnimal(animals[i].$1, animals[i].$2, tier, i),
-      ],
-    );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        SizedBox(width: 52, child: column([0, 1, 2])),
-        Expanded(child: panel),
-        SizedBox(width: 52, child: column([3, 4, 5])),
+        for (var i = 0; i < emojis.length; i++)
+          _buildPartyAnimal(emojis[i].$1, emojis[i].$2, tier, i),
+        for (var i = 0; i < images.length; i++) imageAnimal(images[i], 10 + i),
       ],
     );
   }
@@ -2411,7 +2530,7 @@ class _ListenScreenState extends State<ListenScreen>
                 colors: switch (_mode) {
                   AppMode.listen => kKawaiiBackground,
                   AppMode.tap => kFireBackground,
-                  AppMode.metro => kMetroBackgrounds[tierFor(_metro.bpm)],
+                  AppMode.metro => kMetroBackground,
                 },
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -2420,6 +2539,7 @@ class _ListenScreenState extends State<ListenScreen>
             child: SafeArea(
               child: Stack(
                 children: [
+                  if (_mode == AppMode.metro) _buildMushroomDrift(),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
                     child: Column(
@@ -2473,6 +2593,13 @@ class _ListenScreenState extends State<ListenScreen>
                   ),
                   if (_mode == AppMode.listen)
                     Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
+                  if (_mode == AppMode.metro)
+                    Positioned(
+                      left: 8,
+                      right: 56,
+                      bottom: 64,
+                      child: _buildParade(),
+                    ),
                   if (_mode != AppMode.metro)
                     Positioned(
                       left: 0,
