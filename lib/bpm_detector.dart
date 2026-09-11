@@ -172,6 +172,16 @@ class BpmDetector {
   // trop bas → on saute sur les subdivisions (×2).
   static const double _keepRatio = 0.5;
 
+  /// Corrélation brute minimale d'un candidat plus rapide, relative à celle
+  /// du meilleur, pour être préféré : de [_rawRatioMin] (candidat lent
+  /// improbable) à [_rawRatioMax] (candidat lent pleinement plausible).
+  static const double _rawRatioMin = 0.5;
+  static const double _rawRatioMax = 0.85;
+
+  /// Idem pour le score harmonique (non pondéré) : de [_keepRatio] à
+  /// [_keepRatioMax] selon la plausibilité du candidat lent.
+  static const double _keepRatioMax = 0.95;
+
   /// Contraste backbeat minimal (r_mid(2L) − r_mid(L)) pour qu'un candidat
   /// soit retenu par la règle du backbeat plutôt que par la règle générale.
   static const double _backbeatMinContrast = 0.2;
@@ -453,19 +463,51 @@ class BpmDetector {
     // évite de sauter sur une croche pointée (rapport 4/3), périodicité
     // réelle mais qui n'est pas le tempo. Le rapport 1,5 est admis : c'est
     // la relation entre le "÷3" et le "÷2" d'un même tempo.
-    final threshold = top.$3 * _keepRatio;
+    // Pour sauter vers un candidat plus rapide, sa corrélation BRUTE doit
+    // tenir la comparaison avec celle du meilleur — d'autant plus que le
+    // candidat lent est plausible. À 62 BPM (improbable), un double à
+    // moitié aussi corrélé suffit ; à 90 ou 100 BPM (courants en rap), il
+    // faut une vraie pulsation au double (r ≥ 85 % de celle du lent). Des
+    // clics purs à 200 passent (r identique) ; une croche parasite à 180
+    // sur du rap à 90 ne passe pas (r faible).
+    final topBpm = 60 * framesPerSecond / top.$1;
+    final plaus = priorWeight(topBpm);
+    final rawBar = _rawRatioMin + (_rawRatioMax - _rawRatioMin) * plaus;
+    // Même logique sur le score harmonique, comparé SANS l'a priori : deux
+    // clics purs à 200 et 100 ont des scores identiques, et le petit malus
+    // de l'a priori au-dessus de 180 ne doit pas trancher à lui seul.
+    final scoreBar = _keepRatio + (_keepRatioMax - _keepRatio) * plaus;
+    final threshold = top.$2 * scoreBar;
     var best = top;
     if (backbeatPick != null) {
       best = backbeatPick;
     } else {
       for (final p in peaks) {
-        if (p.$3 < threshold || p.$1 >= best.$1) continue;
+        if (p.$2 < threshold || p.$1 >= best.$1) continue;
+        // Un candidat rapide franchement improbable (a priori < 0,5, soit
+        // au-delà de ~245 BPM en Auto) ne peut pas gagner par ce biais.
+        if (priorWeight(60 * framesPerSecond / p.$1) < 0.5) continue;
         // Le score harmonique d'un candidat au double hérite de la moitié
         // du score du vrai tempo (terme 2L) : il faut aussi que sa propre
         // corrélation brute tienne la route, sinon des charleys discrets
         // suffiraient à doubler le tempo.
-        if (r[p.$1] < 0.5 * r[top.$1]) continue;
+        if (r[p.$1] < rawBar * r[top.$1]) continue;
         if (_isIntegerRatio(top.$1 / p.$1)) best = p;
+      }
+    }
+
+    // Figures pointées : un rival presque aussi fort (≥ 80 %) en rapport
+    // 4:3 ou 3:2 avec le choix courant est une croche pointée (4/3 du
+    // tempo, typique des delays de psytrance : 186 pour 140) ou une noire
+    // pointée (2/3 du tempo : 92 pour 138). Le vrai temps est le non-pointé :
+    // le plus LENT des deux en 4:3, le plus RAPIDE en 3:2.
+    for (final p in peaks) {
+      if (p == best || p.$3 < 0.8 * best.$3) continue;
+      final ratio = p.$1 / best.$1; // > 1 : p est plus lent que best
+      if ((ratio / (4 / 3) - 1).abs() < 0.05) {
+        best = p; // best était la croche pointée de p
+      } else if ((ratio / (2 / 3) - 1).abs() < 0.05) {
+        best = p; // best était la noire pointée de p
       }
     }
 
