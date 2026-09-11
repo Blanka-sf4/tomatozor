@@ -116,6 +116,16 @@ const kRanges = [
   TempoRange('225-450', 225, 450),
 ];
 
+/// Une flamme crachée : position de départ, direction, instant de naissance.
+class _Flame {
+  _Flame(this.born, this.angle, this.speed, this.size, this.spin);
+  final double born;
+  final double angle;
+  final double speed;
+  final double size;
+  final double spin;
+}
+
 /// Les deux modes de l'appli.
 enum AppMode {
   /// Écoute au micro, détection automatique.
@@ -324,6 +334,14 @@ class _ListenScreenState extends State<ListenScreen>
   static const Duration _tapTimeout = Duration(seconds: 2);
   // Rebond du dino à chaque tap.
   final ValueNotifier<double> _dinoBounce = ValueNotifier(0);
+  // Instant du calage au tap : pendant 3 s, impossible de relancer.
+  DateTime? _tapLockedAt;
+  static const Duration _tapLockHold = Duration(seconds: 3);
+
+  // Flammes crachées par le dino (mode secours, calé) : des particules
+  // nées à sa bouche, qui partent vers l'avant en grossissant.
+  final List<_Flame> _flames = [];
+  double _nextFlameAt = 0;
 
   // --- Verrouillage ("le BPM est fixé") ---------------------------------
   // Calé quand les 7 dernières estimations (ou 8 taps) tiennent dans
@@ -701,10 +719,18 @@ class _ListenScreenState extends State<ListenScreen>
     _dinoBounce.value = 1;
 
     if (_locked) {
-      // Calé : un tap relance une nouvelle mesure.
+      // Calé : pendant 3 s le dino crache ses flammes et on ne peut pas
+      // le relancer. Ensuite, un tap relance une nouvelle mesure.
+      final since = _tapLockedAt == null
+          ? _tapLockHold
+          : now.difference(_tapLockedAt!);
+      if (since < _tapLockHold) return;
       _taps.clear();
       _locked = false;
       _beatAnchor = null;
+      _flames.clear();
+      setState(() => _displayBpm = null);
+      return;
     } else if (_taps.isNotEmpty && now.difference(_taps.last) > _tapTimeout) {
       _taps.clear();
     }
@@ -733,6 +759,7 @@ class _ListenScreenState extends State<ListenScreen>
         // et le plus long intervalle.
         if (spread < 0.12) {
           _locked = true;
+          _tapLockedAt = now;
           _celebrate(kPig);
           _store.setLastTapBpm(bpm);
         }
@@ -776,6 +803,22 @@ class _ListenScreenState extends State<ListenScreen>
     } else if (_blink.value && t >= _blinkUntil) {
       _blink.value = false;
     }
+    // Flammes crachées : tant que le dino est calé en mode secours, une
+    // nouvelle toutes les ~70 ms ; chacune vit 0,8 s.
+    final spitting = _mode == AppMode.tap && _locked;
+    if (spitting && t >= _nextFlameAt) {
+      _flames.add(
+        _Flame(
+          t,
+          (_rng.nextDouble() - 0.5) * 1.1, // ±32° autour de "droit devant"
+          70 + _rng.nextDouble() * 60,
+          22 + _rng.nextDouble() * 16,
+          (_rng.nextDouble() - 0.5) * 3,
+        ),
+      );
+      _nextFlameAt = t + 0.05 + _rng.nextDouble() * 0.05;
+    }
+    _flames.removeWhere((f) => t - f.born > 0.8);
     // Vie des mascottes : un petit événement toutes les 2,5 à 6 s.
     if (_mascotOverride == null) {
       final tap = _mode == AppMode.tap;
@@ -987,7 +1030,7 @@ class _ListenScreenState extends State<ListenScreen>
   Widget _buildMascot() {
     final tap = _mode == AppMode.tap;
     return SizedBox(
-      height: 64,
+      height: 80,
       child: ValueListenableBuilder<String>(
         valueListenable: _mascotFrame,
         builder: (context, frame, _) {
@@ -1008,7 +1051,7 @@ class _ListenScreenState extends State<ListenScreen>
             },
             child: Image.asset(
               'assets/images/$frame.png',
-              height: 60,
+              height: 75,
               filterQuality: FilterQuality.medium,
               gaplessPlayback: true,
             ),
@@ -1236,7 +1279,7 @@ class _ListenScreenState extends State<ListenScreen>
     final analysing = !tap && _isListening && !_locked && _lastResult != null;
     final nodding = !tap && _locked && _beatAnchor != null;
 
-    return GestureDetector(
+    final dino = GestureDetector(
       onTapDown: (_) {
         squish();
         onTap();
@@ -1299,6 +1342,59 @@ class _ListenScreenState extends State<ListenScreen>
         ),
       ),
     );
+
+    // Les flammes se dessinent par-dessus, dans une zone plus large que
+    // le dino pour pouvoir en sortir. Elles ne captent pas les taps.
+    return SizedBox(
+      width: 300,
+      height: 300,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          dino,
+          IgnorePointer(
+            child: ValueListenableBuilder<double>(
+              valueListenable: _tick,
+              builder: (context, t, _) {
+                return Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    for (final f in _flames) _buildFlameParticle(f, t),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFlameParticle(_Flame f, double t) {
+    final age = t - f.born; // 0 → 0,8 s
+    final life = (age / 0.8).clamp(0.0, 1.0);
+    // Départ à la bouche (centre + 50 px vers le bas), trajet vers le bas
+    // et l'avant, en grossissant puis en s'effaçant.
+    final dist = f.speed * age;
+    final x = 150 + sin(f.angle) * dist;
+    final y = 150 + 50 + cos(f.angle) * dist * 0.6;
+    final scale = 0.5 + 1.4 * life;
+    final opacity = life < 0.7 ? 1.0 : 1 - (life - 0.7) / 0.3;
+    return Positioned(
+      left: x - f.size / 2,
+      top: y - f.size / 2,
+      child: Opacity(
+        opacity: opacity,
+        child: Transform.rotate(
+          angle: f.spin * life,
+          child: Transform.scale(
+            scale: scale,
+            child: Text('🔥', style: TextStyle(fontSize: f.size)),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildStatus(BuildContext context) {
@@ -1313,7 +1409,7 @@ class _ListenScreenState extends State<ListenScreen>
           Text('Calé ✓', style: theme.textTheme.bodyLarge),
           const SizedBox(height: 4),
           Text(
-            'Tape le dino pour recommencer',
+            'Laisse-le cracher… puis tape-le pour recommencer',
             style: theme.textTheme.bodySmall,
           ),
         ];
