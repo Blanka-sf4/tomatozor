@@ -54,7 +54,7 @@ class BpmDetector {
     double snareLowHz = 250,
     double snareHighHz = 1200,
     double kickHz = 100,
-    this.snareWeight = 0.6,
+    this.snareWeight = 0.35,
   }) : _bufferFrames = (bufferSeconds * sampleRate / hopSize).round(),
        // Filtres passe-bas à un pôle : y += a * (x - y). Le coefficient
        // découle de la fréquence de coupure voulue.
@@ -179,7 +179,11 @@ class BpmDetector {
 
   /// Contraste backbeat minimal (r_mid(2L) − r_mid(L)) pour qu'un candidat
   /// soit retenu par la règle du backbeat plutôt que par la règle générale.
-  static const double _backbeatMinContrast = 0.15;
+  static const double _backbeatMinContrast = 0.2;
+
+  /// Score pondéré minimal du meilleur pic pour appliquer la règle du
+  /// backbeat (en dessous, le signal est trop faible pour raffiner).
+  static const double _backbeatMinTopScore = 0.25;
 
   /// Vide toute la mémoire (changement de morceau, redémarrage).
   void reset() {
@@ -436,10 +440,13 @@ class BpmDetector {
     // caisse claire (clics, kick seul, speedcore), tous les contrastes sont
     // ~0 et on suit la règle générale.
     final top = peaks.first;
+    // La règle ne s'applique qu'à des candidats sérieux : au moins la
+    // moitié du meilleur score, et un meilleur score qui n'est pas du
+    // bruit. Sinon, sur un signal faible, elle piocherait n'importe quoi.
     (int, double, double)? backbeatPick;
     var bestBb = _backbeatMinContrast;
     for (final p in peaks) {
-      if (p.$3 < top.$3 * 0.35) continue;
+      if (top.$3 < _backbeatMinTopScore || p.$3 < top.$3 * 0.5) continue;
       final bb = backbeatEvidence(p.$1);
       if (debugTrace) {
         // ignore: avoid_print
