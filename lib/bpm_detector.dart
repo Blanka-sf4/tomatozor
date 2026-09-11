@@ -14,10 +14,19 @@ class BpmResult {
     required this.bpm,
     required this.confidence,
     required this.candidates,
+    required this.periodSeconds,
+    required this.secondsToNextBeat,
   });
 
   /// Le tempo retenu.
   final double bpm;
+
+  /// Durée d'un temps, en secondes (= 60 / bpm).
+  final double periodSeconds;
+
+  /// Délai estimé entre la fin du son analysé et le prochain temps.
+  /// Sert à faire pulser un indicateur en rythme.
+  final double secondsToNextBeat;
 
   /// Force de la périodicité au tempo retenu (0 = rien, 1 = parfait).
   final double confidence;
@@ -310,6 +319,27 @@ class BpmDetector {
     final lagFrac = lag + delta;
 
     final bpm = 60 * framesPerSecond / lagFrac;
+
+    // Phase du beat : on replie le flux d'onsets modulo la période (comme
+    // si on empilait toutes les mesures) dans 32 cases ; la case la plus
+    // chargée est la position du temps. On ne garde que les 4 dernières
+    // secondes, pondérées vers le récent, pour suivre les dérives.
+    const bins = 32;
+    final hist = Float64List(bins);
+    final from = max(0, n - (4 * framesPerSecond).round());
+    for (var i = from; i < n; i++) {
+      final phase = (i / lagFrac) % 1.0;
+      final weight = (i - from) / (n - from); // 0 → 1, récent = lourd
+      hist[(phase * bins).floor() % bins] += max(0.0, x[i]) * weight;
+    }
+    var bestBin = 0;
+    for (var b = 1; b < bins; b++) {
+      if (hist[b] > hist[bestBin]) bestBin = b;
+    }
+    final beatPhase = (bestBin + 0.5) / bins;
+    final lastPhase = ((n - 1) / lagFrac) % 1.0;
+    final framesToNextBeat = ((beatPhase - lastPhase) % 1.0) * lagFrac;
+
     final candidates = peaks
         .take(5)
         .map((p) => BpmCandidate(60 * framesPerSecond / p.$1, p.$3))
@@ -319,6 +349,8 @@ class BpmDetector {
       bpm: bpm,
       confidence: r[lag].clamp(0.0, 1.0),
       candidates: candidates,
+      periodSeconds: lagFrac / framesPerSecond,
+      secondsToNextBeat: framesToNextBeat / framesPerSecond,
     );
   }
 }

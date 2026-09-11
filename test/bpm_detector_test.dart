@@ -118,6 +118,18 @@ void main() {
     expect(res!.bpm, closeTo(125, 1.5));
   });
 
+  test('phase du beat : le prochain temps prédit tombe sur un kick', () {
+    const bpm = 120.0;
+    final d = BpmDetector();
+    final res = run(d, synth(bpm))!;
+    expect(res.periodSeconds, closeTo(0.5, 0.005));
+    // Le signal fait 10 s pile, kicks à 0, 0.5, 1.0 … donc le prochain
+    // tombe à 10.0 s exactement (ou un multiple de 0.5 après).
+    final next = 10.0 + res.secondsToNextBeat;
+    final offBeat = (next / 0.5) % 1.0;
+    expect(min(offBeat, 1 - offBeat), lessThan(0.06));
+  });
+
   test('pas assez de son → null', () {
     final d = BpmDetector();
     expect(run(d, synth(120, seconds: 2)), isNull);
