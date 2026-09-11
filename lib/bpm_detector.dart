@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:fftea/fftea.dart';
+
 /// Un tempo candidat : sa valeur et la force de sa périodicité (0..1+).
 class BpmCandidate {
   const BpmCandidate(this.bpm, this.score);
@@ -38,8 +40,15 @@ class BpmResult {
 /// Détecteur de tempo en temps réel.
 ///
 /// Pipeline :
-///   échantillons → passe-bas → énergie par trame → flux d'onsets
+///   échantillons → FFT glissante (2048 pts, Hann, tous les 256)
+///   → flux spectral (somme des montées de log-magnitude, bin par bin)
 ///   → autocorrélation → pic → interpolation → BPM
+///
+/// Le flux spectral compte les attaques dans chaque bin de fréquence
+/// indépendamment : une nouvelle note de basse, une syllabe, un accord y
+/// laissent une trace, là où une simple mesure d'énergie ne voit que les
+/// gros coups de batterie. C'est ce qui rend le hip-hop et les morceaux
+/// sans batterie franche détectables.
 ///
 /// On lui pousse du son avec [addSamples] et on lui demande une estimation
 /// avec [estimate] quand on veut. Aucune dépendance Flutter.
@@ -50,22 +59,33 @@ class BpmDetector {
     this.bufferSeconds = 8.0,
     this.minBpm = 60,
     this.maxBpm = 450,
-    double lowPassHz = 150,
-    double snareLowHz = 250,
-    double snareHighHz = 1200,
-    double kickHz = 100,
-    this.snareWeight = 0.35,
+    this.fftSize = 2048,
+    double lowZoneHz = 300,
+    double midZoneHz = 3000,
   }) : _bufferFrames = (bufferSeconds * sampleRate / hopSize).round(),
-       // Filtres passe-bas à un pôle : y += a * (x - y). Le coefficient
-       // découle de la fréquence de coupure voulue.
-       _lpAlpha = 1 - exp(-2 * pi * lowPassHz / sampleRate),
-       _midAlpha = 1 - exp(-2 * pi * snareHighHz / sampleRate),
-       _hpAlpha = 1 - exp(-2 * pi * snareLowHz / sampleRate),
-       _kickAlpha = 1 - exp(-2 * pi * kickHz / sampleRate) {
+       _fft = FFT(fftSize),
+       _window = Float64List(fftSize),
+       _ring = Float64List(fftSize),
+       _lowBins = (lowZoneHz * fftSize / sampleRate).round(),
+       _midBins = (midZoneHz * fftSize / sampleRate).round() {
     _onsets = Float64List(_bufferFrames);
     _onsetsMid = Float64List(_bufferFrames);
     _onsetsKick = Float64List(_bufferFrames);
+    _prevLogMag = Float64List(fftSize ~/ 2 + 1);
+    _frame = Float64List(fftSize);
+    for (var i = 0; i < fftSize; i++) {
+      _window[i] = 0.5 - 0.5 * cos(2 * pi * i / fftSize); // Hann
+    }
   }
+
+  /// Taille de la FFT (fenêtre d'analyse). 2048 @ 44,1 kHz = 46 ms.
+  final int fftSize;
+
+  /// Poids des zones (basse < 300 Hz, médium 300-3000, aiguë > 3 kHz) dans
+  /// le flux principal, chaque zone étant d'abord moyennée par bin.
+  double zoneWeightLow = 1.0;
+  double zoneWeightMid = 0.8;
+  double zoneWeightHigh = 0.5;
 
   final int sampleRate;
 
@@ -113,16 +133,17 @@ class BpmDetector {
   }
 
   final int _bufferFrames;
-  final double _lpAlpha;
-  final double _midAlpha;
-  final double _hpAlpha;
-  final double _kickAlpha;
-
-  /// Poids de la bande "caisse claire" (150-1200 Hz) dans le flux
-  /// d'onsets, par rapport à la bande "kick" (< 150 Hz). Le hip-hop, le
-  /// reggae, la trap portent leur rythme sur la caisse claire : sans cette
-  /// bande, le détecteur est quasi aveugle sur ces styles.
-  final double snareWeight;
+  final FFT _fft;
+  final Float64List _window;
+  // Les derniers [fftSize] échantillons (anneau) et la trame de travail.
+  final Float64List _ring;
+  int _ringPos = 0;
+  late final Float64List _frame;
+  // Bins de fréquence délimitant les zones basse / médium / aiguë.
+  final int _lowBins;
+  final int _midBins;
+  // Log-magnitude de la trame précédente, pour le flux.
+  late Float64List _prevLogMag;
 
   /// Nombre de trames par seconde.
   double get framesPerSecond => sampleRate / hopSize;
@@ -132,30 +153,8 @@ class BpmDetector {
 
   // --- état du pipeline ---------------------------------------------------
 
-  // Sorties des passe-bas (< 150 Hz et < 1200 Hz). La bande caisse claire
-  // est la différence des deux.
-  double _lp = 0;
-  double _mid = 0;
-  double _mid2 = 0; // second pôle du passe-bas de la bande caisse claire
-  double _hp1 = 0; // états des deux passe-haut (coupent le kick)
-  double _hp2 = 0;
-  double _kick1 = 0; // bande kick propre (deux pôles à 100 Hz)
-  double _kick2 = 0;
-  double _frameEnergyKick = 0;
-  double _prevLogRmsKick = log(_rmsFloor);
-
-  // Trame en cours de remplissage, par bande.
-  double _frameEnergy = 0;
-  double _frameEnergyMid = 0;
+  // Échantillons reçus depuis la dernière trame.
   int _frameCount = 0;
-
-  // RMS de la trame précédente (pour le flux), par bande.
-  double _prevLogRms = log(_rmsFloor);
-  double _prevLogRmsMid = log(_rmsFloor);
-
-  /// Niveaux RMS de la dernière trame, par bande (pour le diagnostic).
-  double lastRmsLow = 0;
-  double lastRmsMid = 0;
 
   // Buffers circulaires du flux d'onsets : une valeur par trame. Le
   // premier combine kick + caisse claire ; le second ne garde que la
@@ -167,10 +166,6 @@ class BpmDetector {
   late final Float64List _onsetsKick;
   int _writePos = 0;
   int _filled = 0;
-
-  // Plancher ajouté au RMS avant le log : évite que le bruit de fond quasi
-  // nul produise des variations de log énormes. 0.01 = -40 dBFS.
-  static const double _rmsFloor = 0.01;
 
   // Fraction du meilleur score qu'un pic plus rapide doit atteindre pour
   // être préféré. Trop haut → on retombe sur les sous-multiples (÷2, ÷3) ;
@@ -185,22 +180,20 @@ class BpmDetector {
   /// backbeat (en dessous, le signal est trop faible pour raffiner).
   static const double _backbeatMinTopScore = 0.25;
 
+  /// Vrai si [ratio] vaut 1,5, 2, 3 ou 4 à 5 % près.
+  static bool _isIntegerRatio(double ratio) {
+    for (final k in [1.5, 2, 3, 4]) {
+      if ((ratio / k - 1).abs() < 0.05) return true;
+    }
+    return false;
+  }
+
   /// Vide toute la mémoire (changement de morceau, redémarrage).
   void reset() {
-    _lp = 0;
-    _mid = 0;
-    _mid2 = 0;
-    _hp1 = 0;
-    _hp2 = 0;
-    _kick1 = 0;
-    _kick2 = 0;
-    _frameEnergyKick = 0;
-    _prevLogRmsKick = log(_rmsFloor);
-    _frameEnergy = 0;
-    _frameEnergyMid = 0;
+    _ring.fillRange(0, _ring.length, 0);
+    _ringPos = 0;
     _frameCount = 0;
-    _prevLogRms = log(_rmsFloor);
-    _prevLogRmsMid = log(_rmsFloor);
+    _prevLogMag.fillRange(0, _prevLogMag.length, 0);
     _writePos = 0;
     _filled = 0;
   }
@@ -208,29 +201,9 @@ class BpmDetector {
   /// Pousse des échantillons PCM 16 bits mono.
   void addSamples(Int16List samples) {
     for (final s in samples) {
-      // 1. Normaliser en -1..1 et passer en passe-bas : on ne garde que
-      //    les basses (kick, basse), là où le tempo est le plus net.
-      final x = s / 32768.0;
-      _lp += _lpAlpha * (x - _lp);
-      // Bande caisse claire 250-1200 Hz : passe-bas à deux pôles puis deux
-      // passe-haut en cascade (un passe-haut = signal − sa version
-      // passe-bas). Pentes de 12 dB/octave des deux côtés : le kick à
-      // 50-60 Hz n'y entre pratiquement plus, les charleys non plus.
-      _mid += _midAlpha * (x - _mid);
-      _mid2 += _midAlpha * (_mid - _mid2);
-      _hp1 += _hpAlpha * (_mid2 - _hp1);
-      final h1 = _mid2 - _hp1;
-      _hp2 += _hpAlpha * (h1 - _hp2);
-      final snare = h1 - _hp2;
-      _kick1 += _kickAlpha * (x - _kick1);
-      _kick2 += _kickAlpha * (_kick1 - _kick2);
-
-      // 2. Accumuler l'énergie de la trame, par bande.
-      _frameEnergy += _lp * _lp;
-      _frameEnergyMid += snare * snare;
-      _frameEnergyKick += _kick2 * _kick2;
+      _ring[_ringPos] = s / 32768.0;
+      _ringPos = (_ringPos + 1) % fftSize;
       _frameCount++;
-
       if (_frameCount == hopSize) {
         _endFrame();
       }
@@ -238,45 +211,47 @@ class BpmDetector {
   }
 
   void _endFrame() {
-    // 3. RMS de la trame, en log (compresse la dynamique : un passage
-    //    doux et un passage fort donnent des onsets comparables).
-    final rms = sqrt(_frameEnergy / hopSize);
-    final logRms = log(rms + _rmsFloor);
-    final rmsMid = sqrt(_frameEnergyMid / hopSize);
-    final logRmsMid = log(rmsMid + _rmsFloor);
-    lastRmsLow = rms;
-    lastRmsMid = rmsMid;
-
-    // 4. Flux d'onset = montée d'énergie par rapport à la trame précédente,
-    //    bande kick + bande caisse claire. On ignore les descentes (max 0) :
-    //    seule l'attaque nous intéresse.
-    final fluxMid = max(0.0, logRmsMid - _prevLogRmsMid);
-    final flux = max(0.0, logRms - _prevLogRms) + snareWeight * fluxMid;
-    _prevLogRms = logRms;
-    _prevLogRmsMid = logRmsMid;
-    final logRmsKick = log(sqrt(_frameEnergyKick / hopSize) + _rmsFloor);
-    final fluxKick = max(0.0, logRmsKick - _prevLogRmsKick);
-    _prevLogRmsKick = logRmsKick;
-
-    // 5. Ranger dans le buffer circulaire.
-    _onsets[_writePos] = flux;
-    _onsetsMid[_writePos] = fluxMid;
-    _onsetsKick[_writePos] = fluxKick;
+    _frameCount = 0;
+    // 1. Fenêtre de Hann sur les derniers fftSize échantillons.
+    for (var i = 0; i < fftSize; i++) {
+      _frame[i] = _ring[(_ringPos + i) % fftSize] * _window[i];
+    }
+    // 2. FFT → log-magnitude par bin. Le ×50 place le coude du log au bon
+    //    endroit pour un signal micro normalisé en -1..1.
+    final spec = _fft.realFft(_frame).discardConjugates();
+    final nBins = spec.length;
+    // 3. Flux spectral = somme des montées de log-magnitude, bin par bin,
+    //    par zone : basse (< 300 Hz : kick, basse), médium (300-3000 Hz :
+    //    caisse claire, voix, accords), aiguë (> 3 kHz : charleys).
+    double low = 0, mid = 0, high = 0;
+    for (var b = 0; b < nBins; b++) {
+      final c = spec[b];
+      final mag = sqrt(c.x * c.x + c.y * c.y);
+      final lm = log(1 + mag * 50);
+      final d = lm - _prevLogMag[b];
+      _prevLogMag[b] = lm;
+      if (d <= 0) continue;
+      if (b < _lowBins) {
+        low += d;
+      } else if (b < _midBins) {
+        mid += d;
+      } else {
+        high += d;
+      }
+    }
+    // 4. Chaque zone est ramenée à une moyenne par bin (sinon les aigus,
+    //    qui ont 60 fois plus de bins que les basses, écrasent tout), puis
+    //    pondérée : le kick et la basse pilotent, les charleys sont un
+    //    appoint. Les zones basse et médium servent aussi au backbeat.
+    low /= _lowBins;
+    mid /= (_midBins - _lowBins);
+    high /= (nBins - _midBins);
+    _onsets[_writePos] =
+        zoneWeightLow * low + zoneWeightMid * mid + zoneWeightHigh * high;
+    _onsetsMid[_writePos] = mid;
+    _onsetsKick[_writePos] = low;
     _writePos = (_writePos + 1) % _bufferFrames;
     if (_filled < _bufferFrames) _filled++;
-
-    _frameEnergy = 0;
-    _frameEnergyMid = 0;
-    _frameEnergyKick = 0;
-    _frameCount = 0;
-  }
-
-  /// Vrai si [ratio] vaut 1,5, 2, 3 ou 4 à 5 % près.
-  static bool _isIntegerRatio(double ratio) {
-    for (final k in [1.5, 2, 3, 4]) {
-      if ((ratio / k - 1).abs() < 0.05) return true;
-    }
-    return false;
   }
 
   /// Estime le tempo à partir du son en mémoire.
@@ -485,6 +460,11 @@ class BpmDetector {
     } else {
       for (final p in peaks) {
         if (p.$3 < threshold || p.$1 >= best.$1) continue;
+        // Le score harmonique d'un candidat au double hérite de la moitié
+        // du score du vrai tempo (terme 2L) : il faut aussi que sa propre
+        // corrélation brute tienne la route, sinon des charleys discrets
+        // suffiraient à doubler le tempo.
+        if (r[p.$1] < 0.5 * r[top.$1]) continue;
         if (_isIntegerRatio(top.$1 / p.$1)) best = p;
       }
     }

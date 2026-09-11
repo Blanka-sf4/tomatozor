@@ -53,3 +53,6 @@ android/key.properties
 
 # Les APK sont publiés sur GitHub Releases, pas dans git
 releases/*.apk
+
+# Extraits audio réels (calibration), pas dans git
+test/fixtures/
