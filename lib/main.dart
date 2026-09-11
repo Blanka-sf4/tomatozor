@@ -925,9 +925,7 @@ class _ListenScreenState extends State<ListenScreen>
           ),
         ];
       } else {
-        lines = [
-          Text('Continue, régulier…', style: theme.textTheme.bodyLarge),
-        ];
+        lines = [Text('Continue, régulier…', style: theme.textTheme.bodyLarge)];
       }
     } else if (_locked) {
       lines = [
