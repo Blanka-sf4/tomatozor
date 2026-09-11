@@ -5,8 +5,8 @@ import 'dart:typed_data';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart';
 import 'package:record/record.dart';
+import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'bpm_detector.dart';
@@ -142,11 +142,12 @@ class _ListenScreenState extends State<ListenScreen>
   int _rangeIndex = 0;
 
   // --- Verrouillage ("le BPM est fixé") ---------------------------------
-  // Calé quand les 7 dernières estimations tiennent dans ±1,5 % ; décalé
-  // quand elles s'écartent de plus de 4 %. L'écart entre les deux seuils
-  // (hystérésis) évite de clignoter autour de la limite.
+  // Calé quand les 7 dernières estimations tiennent dans ±1,5 %. Une fois
+  // calé, on arrête de chercher : le chiffre est figé jusqu'au Stop (ou
+  // un changement de plage). Le détecteur continue de tourner, mais
+  // uniquement pour recaler la phase du point de beat.
   bool _locked = false;
-  DateTime _lastCelebration = DateTime.fromMillisecondsSinceEpoch(0);
+  double _lockedBpm = 0;
   late final AnimationController _flash;
 
   // --- Horloge du beat --------------------------------------------------------
@@ -280,10 +281,20 @@ class _ListenScreenState extends State<ListenScreen>
       result = _detector.estimate();
       if (result != null) {
         _logResult(result);
-        _history.add(result.bpm);
-        if (_history.length > _historyLength) _history.removeAt(0);
-        _updateBeatClock(result);
-        _updateLock();
+        if (_locked) {
+          // Figé : on ne touche plus au chiffre. On recale juste l'horloge
+          // du beat, et seulement si le détecteur est d'accord avec le
+          // tempo figé (à 3 % près) — sinon sa phase ne veut rien dire.
+          if ((result.bpm / _lockedBpm - 1).abs() < 0.03) {
+            _updateBeatClock(result);
+          }
+          result = null;
+        } else {
+          _history.add(result.bpm);
+          if (_history.length > _historyLength) _history.removeAt(0);
+          _updateBeatClock(result);
+          _updateLock();
+        }
       }
     }
 
@@ -348,25 +359,21 @@ class _ListenScreenState extends State<ListenScreen>
     final spread =
         (_history.reduce(max) - _history.reduce(min)) / med;
 
-    if (!_locked && spread < 0.015) {
+    if (spread < 0.015) {
       _locked = true;
+      _lockedBpm = med;
       _celebrate();
-    } else if (_locked && spread > 0.04) {
-      _locked = false;
     }
   }
 
   Future<void> _celebrate() async {
-    // Pas plus d'une fête toutes les 5 s, sinon ça devient pénible.
-    final now = DateTime.now();
-    if (now.difference(_lastCelebration).inSeconds < 5) return;
-    _lastCelebration = now;
-
     _flash.forward(from: 0);
     unawaited(_player.play(AssetSource('sounds/sneeze.wav')));
-    await HapticFeedback.heavyImpact();
-    await Future.delayed(const Duration(milliseconds: 120));
-    await HapticFeedback.heavyImpact();
+    // Deux secousses. Le paquet `vibration` pilote le moteur directement,
+    // indépendamment du réglage "vibration au toucher" du téléphone.
+    if (await Vibration.hasVibrator()) {
+      await Vibration.vibrate(pattern: [0, 180, 120, 180]);
+    }
   }
 
   void _selectRange(int index) {
@@ -499,11 +506,16 @@ class _ListenScreenState extends State<ListenScreen>
                       'Analyse… ${buffered.toStringAsFixed(1)} s',
                       style: theme.textTheme.bodyLarge,
                     )
-                  else ...[
+                  else if (_locked) ...[
+                    Text('Calé ✓', style: theme.textTheme.bodyLarge),
+                    const SizedBox(height: 4),
                     Text(
-                      _locked
-                          ? 'Calé ✓  ·  confiance ${(result.confidence * 100).toStringAsFixed(0)} %'
-                          : 'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
+                      'Stop ou autre plage pour relancer la recherche',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  ] else ...[
+                    Text(
+                      'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
                       style: theme.textTheme.bodyLarge,
                     ),
                     const SizedBox(height: 4),
