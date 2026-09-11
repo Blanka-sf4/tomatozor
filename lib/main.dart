@@ -926,12 +926,7 @@ class _ListenScreenState extends State<ListenScreen>
         ];
       } else {
         lines = [
-          Text(
-            'Taps : ${_taps.length} / ${_tapsNeeded + 1}',
-            style: theme.textTheme.bodyLarge,
-          ),
-          const SizedBox(height: 4),
-          Text('Continue, régulier…', style: theme.textTheme.bodySmall),
+          Text('Continue, régulier…', style: theme.textTheme.bodyLarge),
         ];
       }
     } else if (_locked) {

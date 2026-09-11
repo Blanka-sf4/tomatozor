@@ -1,4 +1,4 @@
-"""Synthétise un cochon : « groin groin groin groiiiiiing » → assets/sounds/oink.wav
+"""Synthétise un cochon : « groin groin groin grooooin » (4 grognements graves) → assets/sounds/oink.wav
 
 Usage : python3 tools/make_oink.py
 """
@@ -74,7 +74,8 @@ def squeal(dur=1.5):
 
 
 gap = np.zeros(int(0.13 * FS))
-parts = [grunt(), gap, grunt(0.22), gap, grunt(0.26), gap, squeal()]
+# Quatre grognements graves, le dernier plus long et traînant.
+parts = [grunt(), gap, grunt(0.22), gap, grunt(0.26), gap, grunt(0.55)]
 sig = np.concatenate(parts)
 sig = sig / np.max(np.abs(sig)) * 0.9
 pcm = (sig * 32767).astype(np.int16)
