@@ -79,6 +79,11 @@ flutter:
     - assets/sounds/squish_cat.wav
     - assets/sounds/squish_incog.wav
     - assets/sounds/squish_chicken.wav
+    - assets/sounds/squish_dino.wav
+    - assets/sounds/squish_goat.wav
+    - assets/sounds/squish_pig.wav
+    - assets/sounds/squish_unicorn.wav
+    - assets/sounds/squish_psyllo.wav
     - assets/images/
   fonts:
     - family: RubikSprayPaint

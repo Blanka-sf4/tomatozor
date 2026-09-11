@@ -405,7 +405,9 @@ class _ListenScreenState extends State<ListenScreen>
   // Écrasement de la mascotte quand on appuie dessus (1 = écrasée), et
   // son bruit rigolo (pool à faible latence).
   final ValueNotifier<double> _mascotSquish = ValueNotifier(0);
-  final Map<AppMode, AudioPool> _squishPools = {};
+  final Map<String, AudioPool> _squishPools = {};
+  // Écrasement de chaque personnage de la parade, par index.
+  final Map<int, ValueNotifier<double>> _paradeSquish = {};
 
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
@@ -512,19 +514,24 @@ class _ListenScreenState extends State<ListenScreen>
       if (mounted) setState(() {});
     });
     _metro.init();
-    // Un bruit d'écrasement par mascotte.
-    for (final (mode, file) in [
-      (AppMode.listen, 'squish_cat'),
-      (AppMode.tap, 'squish_incog'),
-      (AppMode.metro, 'squish_chicken'),
+    // Un bruit d'écrasement par personnage.
+    for (final name in [
+      'cat',
+      'incog',
+      'chicken',
+      'dino',
+      'goat',
+      'pig',
+      'unicorn',
+      'psyllo',
     ]) {
       AudioPool.create(
-        source: AssetSource('sounds/$file.wav'),
+        source: AssetSource('sounds/squish_$name.wav'),
         maxPlayers: 2,
         audioContext: AudioContextConfig(
           focus: AudioContextConfigFocus.mixWithOthers,
         ).build(),
-      ).then((pool) => _squishPools[mode] = pool);
+      ).then((pool) => _squishPools[name] = pool);
     }
     // Le chat t'accueille au lancement.
     Future.delayed(const Duration(milliseconds: 600), () {
@@ -582,6 +589,8 @@ class _ListenScreenState extends State<ListenScreen>
       'chicken_cluck',
       'psyllo_normal',
       'psyllo_blink',
+      'goat_normal',
+      'goat_blink',
     ]) {
       precacheImage(AssetImage('assets/images/$f.png'), context);
     }
@@ -591,6 +600,9 @@ class _ListenScreenState extends State<ListenScreen>
   void dispose() {
     _faceTimer?.cancel();
     _mascotSquish.dispose();
+    for (final n in _paradeSquish.values) {
+      n.dispose();
+    }
     for (final p in _squishPools.values) {
       p.dispose();
     }
@@ -1073,6 +1085,9 @@ class _ListenScreenState extends State<ListenScreen>
     if (_mascotSquish.value > 0) {
       _mascotSquish.value = max(0, _mascotSquish.value - 0.06);
     }
+    for (final n in _paradeSquish.values) {
+      if (n.value > 0) n.value = max(0, n.value - 0.06);
+    }
 
     final anchor = _beatAnchor;
     if (anchor == null) return;
@@ -1245,12 +1260,16 @@ class _ListenScreenState extends State<ListenScreen>
           _buildSubtitle('METRONOME EDITION', fire: false),
           const Padding(
             padding: EdgeInsets.only(top: 2),
-            child: Text(
-              '🌭 mode mon cul sur la commode 🌭',
-              style: TextStyle(
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-                color: Color(0xFFE6C9FF),
+            child: FittedBox(
+              fit: BoxFit.contain,
+              child: Text(
+                '🌭 mode mon cul sur la commode 🌭',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontStyle: FontStyle.italic,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFFE6C9FF),
+                ),
               ),
             ),
           ),
@@ -1258,15 +1277,15 @@ class _ListenScreenState extends State<ListenScreen>
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              _buildParadeImage('cat_normal', 0),
+              _buildParadeItem('cat', 0),
               const SizedBox(width: 10),
-              _buildPartyEmoji('🦄', 2, 1),
+              _buildParadeItem('unicorn', 1, tier: 2),
               const SizedBox(width: 8),
               _buildMascot(size: 100),
               const SizedBox(width: 8),
-              _buildPartyEmoji('🐐', 3, 2),
+              _buildParadeItem('goat', 2, tier: 3),
               const SizedBox(width: 10),
-              _buildParadeImage('dino_head', 3),
+              _buildParadeItem('dino', 3),
             ],
           ),
         ] else ...[
@@ -1335,7 +1354,12 @@ class _ListenScreenState extends State<ListenScreen>
             child: GestureDetector(
               onTapDown: (_) {
                 _mascotSquish.value = 1;
-                _squishPools[_mode]?.start();
+                _squishPools[switch (_mode) {
+                      AppMode.listen => 'cat',
+                      AppMode.tap => 'incog',
+                      AppMode.metro => 'chicken',
+                    }]
+                    ?.start();
               },
               child: ValueListenableBuilder<double>(
                 valueListenable: _mascotSquish,
@@ -2260,36 +2284,6 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Interface du métronome -------------------------------------------------------
 
-  /// Un animal qui fait la fête. L'animal de la tranche en cours est en
-  /// avant et déchaîné ; les autres suivent, plus mollement. L'intensité
-  /// générale monte avec le tempo.
-  Widget _buildPartyAnimal(String emoji, int tier, int currentTier, int index) {
-    final star = tier == currentTier;
-    final intensity = [0.35, 0.6, 0.85, 1.2][currentTier];
-    return ValueListenableBuilder<double>(
-      valueListenable: _tick,
-      builder: (context, t, _) {
-        final pulse = _metro.running ? _pulse.value : 0.0;
-        final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
-        final amp = intensity * (star ? 1.0 : 0.45);
-        final sway = _metro.running ? 0.0 : 0.05 * sin(t * 1.5 + index);
-        return Transform.translate(
-          offset: Offset(0, -26 * amp * pulse),
-          child: Transform.rotate(
-            angle: side * 0.5 * amp * pulse + sway,
-            child: Transform.scale(
-              scale: (star ? 1.35 : 1.0) * (1 + 0.4 * amp * pulse),
-              child: Opacity(
-                opacity: star ? 1.0 : 0.75,
-                child: Text(emoji, style: const TextStyle(fontSize: 40)),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   /// Des champignons qui dérivent lentement dans le fond, à moitié
   /// transparents, et qui tournent : l'ambiance psyché.
   Widget _buildMushroomDrift() {
@@ -2472,48 +2466,62 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
-  /// Un emoji de la parade, qui fait la fête sur le beat (plus fort si
-  /// c'est l'animal de la tranche en cours) et se balance au repos.
-  Widget _buildPartyEmoji(String emoji, int tier, int index) {
-    return _buildPartyAnimal(emoji, tier, tierFor(_metro.bpm), index);
-  }
+  /// Un personnage de la parade (image dessinée ou emoji), tous à la même
+  /// taille. Il danse sur le beat (plus fort si c'est l'animal de la
+  /// tranche en cours), se balance au repos, cligne des yeux, et un tap
+  /// l'écrase avec son bruit à lui.
+  Widget _buildParadeItem(String name, int index, {int? tier}) {
+    const size = 48.0;
+    final squish = _paradeSquish.putIfAbsent(index, () => ValueNotifier(0));
+    final currentTier = tierFor(_metro.bpm);
+    final star = tier == currentTier;
 
-  /// Un personnage-image de la parade : danse sur le beat, se balance au
-  /// repos, et cligne des yeux de temps en temps (chacun à son rythme).
-  Widget _buildParadeImage(String name, int index) {
-    return ValueListenableBuilder<double>(
-      valueListenable: _tick,
-      builder: (context, t, _) {
-        final tier = tierFor(_metro.bpm);
-        final pulse = _metro.running ? _pulse.value : 0.0;
-        final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
-        final amp = [0.35, 0.6, 0.85, 1.2][tier] * 0.7;
-        final sway = _metro.running ? 0.0 : 0.06 * sin(t * 1.4 + index * 1.3);
-        final bob = _metro.running ? 0.0 : 2 * sin(t * 2.1 + index);
-        final blinkPeriod = 3.7 + index * 0.6;
-        final blinking = (t + index) % blinkPeriod < 0.15;
-        final frame = switch (name) {
-          'psyllo_normal' when blinking => 'psyllo_blink',
-          'cat_normal' when blinking => 'cat_blink',
-          'incog_normal' when blinking => 'incog_peek',
-          _ => name,
-        };
-        final Widget img = name == 'dino_head'
-            ? DinoFace(face: 'head', size: 46, blink: blinking)
-            : Image.asset(
-                'assets/images/$frame.png',
-                height: 46,
-                filterQuality: FilterQuality.medium,
-                gaplessPlayback: true,
-              );
-        return Transform.translate(
-          offset: Offset(0, -22 * amp * pulse + bob),
-          child: Transform.rotate(
-            angle: side * 0.4 * amp * pulse + sway,
-            child: Transform.scale(scale: 1 + 0.3 * amp * pulse, child: img),
-          ),
-        );
+    return GestureDetector(
+      onTapDown: (_) {
+        squish.value = 1;
+        _squishPools[name]?.start();
       },
+      child: ValueListenableBuilder<double>(
+        valueListenable: _tick,
+        builder: (context, t, _) {
+          final pulse = _metro.running ? _pulse.value : 0.0;
+          final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
+          final amp = [0.35, 0.6, 0.85, 1.2][currentTier] * (star ? 1.0 : 0.6);
+          final sway = _metro.running ? 0.0 : 0.06 * sin(t * 1.4 + index * 1.3);
+          final bob = _metro.running ? 0.0 : 2 * sin(t * 2.1 + index);
+          final blinking = (t + index) % (3.7 + index * 0.6) < 0.15;
+          final Widget img = switch (name) {
+            'dino' => DinoFace(face: 'head', size: size, blink: blinking),
+            'pig' => const Text('🐷', style: TextStyle(fontSize: 40)),
+            'unicorn' => const Text('🦄', style: TextStyle(fontSize: 40)),
+            _ => Image.asset(
+              'assets/images/${name}_${blinking ? (name == 'incog' ? 'peek' : 'blink') : 'normal'}.png',
+              height: size,
+              filterQuality: FilterQuality.medium,
+              gaplessPlayback: true,
+            ),
+          };
+          return Transform.translate(
+            offset: Offset(0, -22 * amp * pulse + bob),
+            child: Transform.rotate(
+              angle: side * 0.4 * amp * pulse + sway,
+              child: Transform.scale(
+                scale: (star ? 1.15 : 1.0) * (1 + 0.3 * amp * pulse),
+                child: ValueListenableBuilder<double>(
+                  valueListenable: squish,
+                  builder: (context, sq, child) => Transform.scale(
+                    scaleX: 1 + 0.35 * sq,
+                    scaleY: 1 - 0.4 * sq,
+                    alignment: Alignment.bottomCenter,
+                    child: child,
+                  ),
+                  child: img,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -2523,9 +2531,9 @@ class _ListenScreenState extends State<ListenScreen>
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        _buildPartyEmoji('🐷', 1, 4),
-        _buildParadeImage('incog_normal', 5),
-        _buildParadeImage('psyllo_normal', 6),
+        _buildParadeItem('pig', 4, tier: 1),
+        _buildParadeItem('incog', 5),
+        _buildParadeItem('psyllo', 6),
       ],
     );
   }

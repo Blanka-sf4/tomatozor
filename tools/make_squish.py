@@ -25,3 +25,13 @@ squish("assets/sounds/squish_cat.wav", 1100, 380, 0.28, 34, 1400, 0.5)
 squish("assets/sounds/squish_incog.wav", 380, 110, 0.42, 18, 600, 1.0)
 # Poulet : médium, ballon qu'on presse, tremblement rapide
 squish("assets/sounds/squish_chicken.wav", 700, 220, 0.32, 48, 1000, 0.8)
+# Dino : très grave, gros coussin
+squish("assets/sounds/squish_dino.wav", 300, 80, 0.45, 12, 450, 1.2)
+# Chèvre : bêlement écrasé, chevrotement fort
+squish("assets/sounds/squish_goat.wav", 900, 320, 0.36, 60, 1200, 0.6)
+# Cochon : grave-médium, groin qui couine
+squish("assets/sounds/squish_pig.wav", 520, 150, 0.34, 26, 750, 1.0)
+# Licorne : cristallin, très aigu
+squish("assets/sounds/squish_unicorn.wav", 1600, 600, 0.26, 40, 2200, 0.3)
+# Psyllo : lent, mou, bizarre
+squish("assets/sounds/squish_psyllo.wav", 600, 160, 0.55, 7, 700, 0.9)
