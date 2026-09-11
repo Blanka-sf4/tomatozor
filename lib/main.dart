@@ -10,6 +10,7 @@ import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'bpm_detector.dart';
+import 'history.dart';
 
 // Paramètres audio, partagés avec le détecteur.
 const int kSampleRate = 44100; // échantillons par seconde
@@ -53,6 +54,10 @@ const kFireBackground = [
 ];
 
 const kYellowSign = Color(0xFFFFD600);
+const kGreenSign = Color(0xFF2ECC40);
+
+/// Formate un BPM à la française : 172,2.
+String fmtBpm(double bpm) => bpm.toStringAsFixed(1).replaceAll('.', ',');
 
 const kPurple = Color(0xFF7B2CBF);
 const kPink = Color(0xFFFF69B4);
@@ -241,6 +246,18 @@ class _ListenScreenState extends State<ListenScreen>
   final List<double> _history = [];
   static const int _historyLength = 7;
 
+  // --- Historique des calages (persistant) ---------------------------------
+  final HistoryStore _store = HistoryStore();
+  // Les 8 dernières secondes de son, en anneau : c'est l'extrait qu'on
+  // fige au calage (exactement ce que le détecteur a analysé).
+  static const int _clipSamples = kSampleRate * 8;
+  final Int16List _clipRing = Int16List(_clipSamples);
+  int _clipWrite = 0;
+  int _clipFilled = 0;
+  // Lecteur dédié à la réécoute des extraits.
+  final AudioPlayer _clipPlayer = AudioPlayer();
+  String? _playingFile;
+
   BpmResult? _lastResult;
   double? _displayBpm;
   int _rangeIndex = 0;
@@ -293,6 +310,15 @@ class _ListenScreenState extends State<ListenScreen>
       AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers).build(),
     );
     _player.setVolume(0.7);
+    _clipPlayer.setAudioContext(
+      AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers).build(),
+    );
+    _clipPlayer.onPlayerComplete.listen((_) {
+      if (mounted) setState(() => _playingFile = null);
+    });
+    _store.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   @override
@@ -305,6 +331,7 @@ class _ListenScreenState extends State<ListenScreen>
     _tick.dispose();
     _dinoBounce.dispose();
     _player.dispose();
+    _clipPlayer.dispose();
     _recorder.dispose();
     super.dispose();
   }
@@ -346,6 +373,8 @@ class _ListenScreenState extends State<ListenScreen>
     _samplesSinceEstimate = 0;
     _locked = false;
     _beatAnchor = null;
+    _clipWrite = 0;
+    _clipFilled = 0;
 
     final stream = await _recorder.startStream(
       const RecordConfig(
@@ -405,8 +434,13 @@ class _ListenScreenState extends State<ListenScreen>
     final samples = pcm16ToSamples(bytes);
     if (samples.isEmpty) return;
 
-    // 1. Nourrir le détecteur.
+    // 1. Nourrir le détecteur, et l'anneau des 8 dernières secondes.
     _detector.addSamples(samples);
+    for (final v in samples) {
+      _clipRing[_clipWrite] = v;
+      _clipWrite = (_clipWrite + 1) % _clipSamples;
+    }
+    _clipFilled = min(_clipFilled + samples.length, _clipSamples);
 
     // 2. Vu-mètre (RMS → dB).
     double sumSquares = 0;
@@ -476,10 +510,24 @@ class _ListenScreenState extends State<ListenScreen>
     if (spread < 0.015) {
       _locked = true;
       _celebrate();
+      // On fige l'extrait avant de couper le micro.
+      _saveClip(med);
       // Fixé : plus besoin d'écouter. Le bouton repasse en violet ; appuyer
       // dessus relance une recherche.
       _stopMic();
     }
+  }
+
+  /// Copie l'anneau dans l'ordre chronologique et l'enregistre avec le BPM.
+  Future<void> _saveClip(double bpm) async {
+    final n = _clipFilled;
+    final pcm = Int16List(n);
+    final start = (_clipWrite - n + _clipSamples) % _clipSamples;
+    for (var i = 0; i < n; i++) {
+      pcm[i] = _clipRing[(start + i) % _clipSamples];
+    }
+    await _store.add(bpm, pcm, kSampleRate);
+    if (mounted) setState(() {});
   }
 
   void _selectRange(int index) {
@@ -540,6 +588,7 @@ class _ListenScreenState extends State<ListenScreen>
         if (spread < 0.12) {
           _locked = true;
           _celebrate();
+          _store.setLastTapBpm(bpm);
         }
       }
     }
@@ -1018,6 +1067,185 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
+  /// Le panneau vert HISTO, en bas au centre.
+  Widget _buildHistorySign() {
+    return GestureDetector(
+      onTap: _showHistory,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(14, 4, 14, 6),
+        decoration: BoxDecoration(
+          color: kGreenSign,
+          border: Border.all(color: Colors.black, width: 3),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 6,
+              offset: Offset(2, 3),
+            ),
+          ],
+        ),
+        child: const Text(
+          'HISTO',
+          style: TextStyle(
+            fontFamily: 'RubikSprayPaint',
+            fontSize: 22,
+            height: 1.0,
+            color: Colors.black,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Mode secours : le dernier BPM tapé, en bas au centre.
+  Widget _buildLastTap() {
+    final last = _store.lastTapBpm;
+    if (last == null) return const SizedBox.shrink();
+    return ShaderMask(
+      blendMode: BlendMode.srcIn,
+      shaderCallback: (rect) => const LinearGradient(
+        colors: kFire,
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+      ).createShader(rect),
+      child: Text(
+        'Dernier : ${fmtBpm(last)}',
+        style: const TextStyle(
+          fontFamily: 'RubikSprayPaint',
+          fontSize: 26,
+          height: 1.0,
+          color: Colors.white,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _togglePlay(HistoryEntry e) async {
+    if (_playingFile == e.file) {
+      await _clipPlayer.stop();
+      _playingFile = null;
+    } else {
+      await _clipPlayer.stop();
+      _playingFile = e.file;
+      await _clipPlayer.play(DeviceFileSource(e.file));
+    }
+  }
+
+  /// Popup Historique : les 5 derniers calages, avec date, BPM, ▶ et 🗑.
+  Future<void> _showHistory() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return Theme(
+          data: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: kGreenSign,
+              brightness: Brightness.dark,
+            ),
+          ),
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: kRainbow,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(24),
+              ),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0E1F12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: StatefulBuilder(
+                  builder: (context, setDialogState) {
+                    final entries = _store.entries;
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        RainbowText(
+                          'Historique',
+                          style: Theme.of(context).textTheme.titleLarge!
+                              .copyWith(
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 2,
+                              ),
+                        ),
+                        const SizedBox(height: 8),
+                        if (entries.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: Text('Rien pour l\'instant — cale un son !'),
+                          ),
+                        for (final e in entries)
+                          ListTile(
+                            dense: true,
+                            leading: IconButton(
+                              iconSize: 32,
+                              color: kGreenSign,
+                              icon: Icon(
+                                _playingFile == e.file
+                                    ? Icons.stop_circle
+                                    : Icons.play_circle,
+                              ),
+                              onPressed: () async {
+                                await _togglePlay(e);
+                                setDialogState(() {});
+                              },
+                            ),
+                            title: Text(
+                              '${fmtBpm(e.bpm)} BPM',
+                              style: const TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                            subtitle: Text(_fmtDate(e.at)),
+                            trailing: IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              color: Colors.redAccent,
+                              onPressed: () async {
+                                if (_playingFile == e.file) {
+                                  await _clipPlayer.stop();
+                                  _playingFile = null;
+                                }
+                                await _store.remove(e);
+                                setDialogState(() {});
+                                if (mounted) setState(() {});
+                              },
+                            ),
+                          ),
+                        const SizedBox(height: 4),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('OK'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+    // Fermer le popup arrête la lecture.
+    await _clipPlayer.stop();
+    _playingFile = null;
+  }
+
+  String _fmtDate(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(d.day)}/${two(d.month)}/${d.year}  ${two(d.hour)}:${two(d.minute)}';
+  }
+
   /// Popup à bordure arc-en-ciel : une case par plage, une seule cochée.
   Future<void> _showOptions() async {
     await showDialog<void>(
@@ -1194,6 +1422,14 @@ class _ListenScreenState extends State<ListenScreen>
                   ),
                   if (!tap)
                     Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 72,
+                    child: Center(
+                      child: tap ? _buildLastTap() : _buildHistorySign(),
+                    ),
+                  ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
                 ],
               ),
