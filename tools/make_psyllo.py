@@ -38,11 +38,24 @@ def spiral(d, cx, cy, r, turns=2.5, width=6):
 def draw_psyllo(d, frame="normal"):
     # Pied
     d.rounded_rectangle([p(196, 300), p(316, 470)], radius=50 * SS, fill=STEM, outline=BLACK, width=OUT)
-    # Chapeau : demi-dôme large
-    d.pieslice(box(256, 300, 230, 230), start=180, end=360, fill=CAP, outline=BLACK, width=OUT)
-    d.rounded_rectangle([p(26, 285), p(486, 320)], radius=18 * SS, fill=CAP_DARK, outline=BLACK, width=OUT)
-    # Pois roses, tailles variées
-    for cx, cy, r in ((120, 210, 30), (200, 130, 38), (300, 110, 26), (390, 190, 34), (256, 230, 18), (340, 240, 22)):
+    # Chapeau pointu : un cône aux flancs légèrement bombés, bord ondulé
+    cone = [p(256, 20)]
+    for i in range(0, 21):
+        u = i / 20
+        x = 256 - 236 * u
+        y = 20 + 290 * u ** 0.75
+        cone.insert(0, p(x, y))
+    for i in range(0, 21):
+        u = i / 20
+        x = 256 + 236 * u
+        y = 20 + 290 * u ** 0.75
+        cone.append(p(x, y))
+    d.polygon(cone, fill=CAP, outline=BLACK, width=OUT)
+    d.rounded_rectangle([p(20, 295), p(492, 328)], radius=16 * SS, fill=CAP_DARK, outline=BLACK, width=OUT)
+    # Pointe : petite boule au sommet, façon bonnet
+    d.ellipse(box(256, 24, 22, 22), fill=DOTS, outline=BLACK, width=3 * SS)
+    # Pois roses, tailles variées, dans le cône
+    for cx, cy, r in ((150, 245, 26), (215, 150, 30), (300, 110, 20), (365, 235, 30), (256, 250, 16), (320, 190, 18)):
         d.ellipse(box(cx, cy, r, r), fill=DOTS, outline=BLACK, width=3 * SS)
     # Yeux en spirale (ou fermés)
     for cx in (225, 287):

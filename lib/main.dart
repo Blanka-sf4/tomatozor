@@ -402,8 +402,10 @@ class _ListenScreenState extends State<ListenScreen>
   double _nextMascotEventAt = 1.5;
   double _mascotEventUntil = 0.0;
 
-  // Écrasement de la mascotte quand on appuie dessus (1 = écrasée).
+  // Écrasement de la mascotte quand on appuie dessus (1 = écrasée), et
+  // son bruit rigolo (pool à faible latence).
   final ValueNotifier<double> _mascotSquish = ValueNotifier(0);
+  AudioPool? _squishPool;
 
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
@@ -510,6 +512,13 @@ class _ListenScreenState extends State<ListenScreen>
       if (mounted) setState(() {});
     });
     _metro.init();
+    AudioPool.create(
+      source: AssetSource('sounds/squish.wav'),
+      maxPlayers: 3,
+      audioContext: AudioContextConfig(
+        focus: AudioContextConfigFocus.mixWithOthers,
+      ).build(),
+    ).then((pool) => _squishPool = pool);
     // Le chat t'accueille au lancement.
     Future.delayed(const Duration(milliseconds: 600), () {
       if (mounted) _greet();
@@ -575,6 +584,7 @@ class _ListenScreenState extends State<ListenScreen>
   void dispose() {
     _faceTimer?.cancel();
     _mascotSquish.dispose();
+    _squishPool?.dispose();
     _metro.dispose();
     _mascotTimer?.cancel();
     _mascotFrame.dispose();
@@ -1224,7 +1234,21 @@ class _ListenScreenState extends State<ListenScreen>
         // "PASTELLE EDITION" en petit sous le nom, même police, même style.
         if (_mode == AppMode.metro) ...[
           _buildSubtitle('METRONOME EDITION', fire: false),
-          _buildMascot(size: 110),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              _buildParadeImage('cat_normal', 0),
+              const SizedBox(width: 10),
+              _buildPartyEmoji('🦄', 2, 1),
+              const SizedBox(width: 8),
+              _buildMascot(size: 100),
+              const SizedBox(width: 8),
+              _buildPartyEmoji('🐐', 3, 2),
+              const SizedBox(width: 10),
+              _buildParadeImage('dino_head', 3),
+            ],
+          ),
         ] else ...[
           _buildSubtitle('PASTELLE EDITION', fire: fire),
           if (!fire) _buildMascot(),
@@ -1289,7 +1313,10 @@ class _ListenScreenState extends State<ListenScreen>
             },
             // Un appui l'écrase (squish), il reprend sa forme tout seul.
             child: GestureDetector(
-              onTapDown: (_) => _mascotSquish.value = 1,
+              onTapDown: (_) {
+                _mascotSquish.value = 1;
+                _squishPool?.start();
+              },
               child: ValueListenableBuilder<double>(
                 valueListenable: _mascotSquish,
                 builder: (context, sq, child) => Transform.scale(
@@ -2172,22 +2199,6 @@ class _ListenScreenState extends State<ListenScreen>
                           ),
                         const Divider(height: 20),
                         _buildLatencyControl(setDialogState),
-                        const Divider(height: 20),
-                        FilledButton.icon(
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            _setMode(AppMode.metro);
-                          },
-                          icon: const Text(
-                            '🐔',
-                            style: TextStyle(fontSize: 20),
-                          ),
-                          label: const Text('Mode Métronome'),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: const Color(0xFF16205C),
-                            foregroundColor: Colors.white,
-                          ),
-                        ),
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),
@@ -2337,10 +2348,10 @@ class _ListenScreenState extends State<ListenScreen>
     }
 
     final panel = Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      padding: const EdgeInsets.fromLTRB(10, 4, 10, 6),
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(color: accent, width: 3),
         boxShadow: [
           BoxShadow(
@@ -2356,24 +2367,25 @@ class _ListenScreenState extends State<ListenScreen>
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              roundButton(Icons.remove, () => _metroSetBpm(bpm - 1)),
+              roundButton(Icons.remove, () => _metroSetBpm(bpm - 1), size: 32),
               const SizedBox(width: 12),
               Text(
                 bpm.round().toString(),
                 style: theme.textTheme.displayLarge!.copyWith(
-                  fontSize: 72,
+                  fontSize: 40,
                   fontWeight: FontWeight.bold,
                   fontFeatures: const [FontFeature.tabularFigures()],
                   color: Colors.white,
+                  height: 1.0,
                 ),
               ),
               const SizedBox(width: 12),
-              roundButton(Icons.add, () => _metroSetBpm(bpm + 1)),
+              roundButton(Icons.add, () => _metroSetBpm(bpm + 1), size: 32),
             ],
           ),
           Text(
             'BPM',
-            style: theme.textTheme.titleMedium?.copyWith(color: Colors.white70),
+            style: theme.textTheme.labelSmall?.copyWith(color: Colors.white70),
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
@@ -2412,8 +2424,8 @@ class _ListenScreenState extends State<ListenScreen>
               ),
               const SizedBox(width: 12),
               SizedBox(
-                width: 64,
-                height: 64,
+                width: 44,
+                height: 44,
                 child: FilledButton(
                   onPressed: _metroToggle,
                   style: FilledButton.styleFrom(
@@ -2424,80 +2436,76 @@ class _ListenScreenState extends State<ListenScreen>
                   ),
                   child: Icon(
                     running ? Icons.stop : Icons.play_arrow,
-                    size: 36,
+                    size: 26,
                   ),
                 ),
               ),
             ],
           ),
-          _buildBeatDot(),
         ],
       ),
     );
 
-    return panel;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 40),
+      child: panel,
+    );
   }
 
-  /// La parade du bas : tous les personnages de l'appli, qui font la fête
-  /// quand le métronome tourne. Psyllo cligne des yeux de temps en temps.
+  /// Un emoji de la parade, qui fait la fête sur le beat (plus fort si
+  /// c'est l'animal de la tranche en cours) et se balance au repos.
+  Widget _buildPartyEmoji(String emoji, int tier, int index) {
+    return _buildPartyAnimal(emoji, tier, tierFor(_metro.bpm), index);
+  }
+
+  /// Un personnage-image de la parade : danse sur le beat, se balance au
+  /// repos, et cligne des yeux de temps en temps (chacun à son rythme).
+  Widget _buildParadeImage(String name, int index) {
+    return ValueListenableBuilder<double>(
+      valueListenable: _tick,
+      builder: (context, t, _) {
+        final tier = tierFor(_metro.bpm);
+        final pulse = _metro.running ? _pulse.value : 0.0;
+        final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
+        final amp = [0.35, 0.6, 0.85, 1.2][tier] * 0.7;
+        final sway = _metro.running ? 0.0 : 0.06 * sin(t * 1.4 + index * 1.3);
+        final bob = _metro.running ? 0.0 : 2 * sin(t * 2.1 + index);
+        final blinkPeriod = 3.7 + index * 0.6;
+        final blinking = (t + index) % blinkPeriod < 0.15;
+        final frame = switch (name) {
+          'psyllo_normal' when blinking => 'psyllo_blink',
+          'cat_normal' when blinking => 'cat_blink',
+          'incog_normal' when blinking => 'incog_peek',
+          _ => name,
+        };
+        final Widget img = name == 'dino_head'
+            ? DinoFace(face: 'head', size: 46, blink: blinking)
+            : Image.asset(
+                'assets/images/$frame.png',
+                height: 46,
+                filterQuality: FilterQuality.medium,
+                gaplessPlayback: true,
+              );
+        return Transform.translate(
+          offset: Offset(0, -22 * amp * pulse + bob),
+          child: Transform.rotate(
+            angle: side * 0.4 * amp * pulse + sway,
+            child: Transform.scale(scale: 1 + 0.3 * amp * pulse, child: img),
+          ),
+        );
+      },
+    );
+  }
+
+  /// La parade du bas.
   Widget _buildParade() {
-    final tier = tierFor(_metro.bpm);
-    const emojis = [
-      ('🦕', 0),
-      ('🐴', 1),
-      ('🦖', 2),
-      ('🐐', 3),
-      ('🐷', 1),
-      ('🦄', 2),
-    ];
-    const images = [
-      'dino_head',
-      'cat_normal',
-      'incog_normal',
-      'chicken_normal',
-      'psyllo_normal',
-    ];
-
-    Widget imageAnimal(String name, int index) {
-      return ValueListenableBuilder<double>(
-        valueListenable: _tick,
-        builder: (context, t, _) {
-          final pulse = _metro.running ? _pulse.value : 0.0;
-          final side = (_beatIndex + index).isEven ? 1.0 : -1.0;
-          final amp = [0.35, 0.6, 0.85, 1.2][tier] * 0.7;
-          final sway = _metro.running ? 0.0 : 0.05 * sin(t * 1.5 + index);
-          // Psyllo cligne des yeux : 0,15 s toutes les ~4 s
-          final frame = name == 'psyllo_normal' && (t % 4.3) < 0.15
-              ? 'psyllo_blink'
-              : name;
-          return Transform.translate(
-            offset: Offset(0, -22 * amp * pulse),
-            child: Transform.rotate(
-              angle: side * 0.4 * amp * pulse + sway,
-              child: Transform.scale(
-                scale: 1 + 0.3 * amp * pulse,
-                child: Image.asset(
-                  'assets/images/$frame.png',
-                  height: 44,
-                  filterQuality: FilterQuality.medium,
-                  gaplessPlayback: true,
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-
-    return Wrap(
-      alignment: WrapAlignment.center,
-      crossAxisAlignment: WrapCrossAlignment.end,
-      spacing: 6,
-      runSpacing: 8,
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        for (var i = 0; i < emojis.length; i++)
-          _buildPartyAnimal(emojis[i].$1, emojis[i].$2, tier, i),
-        for (var i = 0; i < images.length; i++) imageAnimal(images[i], 10 + i),
+        _buildPartyEmoji('🐷', 1, 4),
+        _buildParadeImage('incog_normal', 5),
+        _buildParadeImage('psyllo_normal', 6),
       ],
     );
   }
@@ -2607,6 +2615,18 @@ class _ListenScreenState extends State<ListenScreen>
                       bottom: 72,
                       child: Center(
                         child: tap ? _buildLastTap() : _buildHistorySign(),
+                      ),
+                    ),
+                  if (_mode == AppMode.listen)
+                    Positioned(
+                      right: 52,
+                      bottom: 74,
+                      child: IconButton(
+                        onPressed: () => _setMode(AppMode.metro),
+                        tooltip: 'Mode Métronome',
+                        iconSize: 26,
+                        color: const Color(0xFF4FA3FF),
+                        icon: const Icon(Icons.av_timer),
                       ),
                     ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
