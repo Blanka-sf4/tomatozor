@@ -26,8 +26,17 @@ const kRainbow = [
   Color(0xFFFF2D9B),
 ];
 
+/// Dégradé "incendie", du bas (jaune) vers le haut (rouge sombre).
+const kFire = [
+  Color(0xFF7A0000),
+  Color(0xFFE62E00),
+  Color(0xFFFF8A00),
+  Color(0xFFFFE066),
+];
+
 const kPurple = Color(0xFF7B2CBF);
 const kPink = Color(0xFFFF69B4);
+const kAlertRed = Color(0xFFE53935);
 
 /// Logarithme en base 10 (Dart ne fournit que le log népérien).
 double log10(double x) => log(x) / ln10;
@@ -61,6 +70,15 @@ const kRanges = [
   TempoRange('225-450', 225, 450),
 ];
 
+/// Les deux modes de l'appli.
+enum AppMode {
+  /// Écoute au micro, détection automatique.
+  listen,
+
+  /// "Mode de secours" : tap tempo, on tape le rythme sur le dino.
+  tap,
+}
+
 void main() {
   runApp(const TomatozorApp());
 }
@@ -74,7 +92,7 @@ class TomatozorApp extends StatelessWidget {
       title: 'TOMATOZOR',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFFFF69B4),
+          seedColor: kPink,
           brightness: Brightness.dark,
         ),
       ),
@@ -113,12 +131,20 @@ class RainbowText extends StatelessWidget {
   }
 }
 
-/// Une lettre façon tag : ombre portée, contour noir épais, remplissage
-/// en dégradé d'une couleur de l'arc-en-ciel vers sa version claire.
+/// Une lettre façon tag : ombre portée, contour épais, remplissage en
+/// dégradé vertical ([colors], du haut vers le bas).
 class GraffitiLetter extends StatelessWidget {
-  const GraffitiLetter(this.char, {super.key, required this.color});
+  const GraffitiLetter(
+    this.char, {
+    super.key,
+    required this.colors,
+    this.strokeColor = Colors.black,
+    this.shadowColor = const Color(0xFF1E0630),
+  });
   final String char;
-  final Color color;
+  final List<Color> colors;
+  final Color strokeColor;
+  final Color shadowColor;
 
   static const _style = TextStyle(
     fontFamily: 'RubikSprayPaint',
@@ -132,10 +158,7 @@ class GraffitiLetter extends StatelessWidget {
       children: [
         Transform.translate(
           offset: const Offset(5, 7),
-          child: Text(
-            char,
-            style: _style.copyWith(color: const Color(0xFF1E0630)),
-          ),
+          child: Text(char, style: _style.copyWith(color: shadowColor)),
         ),
         Text(
           char,
@@ -144,13 +167,13 @@ class GraffitiLetter extends StatelessWidget {
               ..style = PaintingStyle.stroke
               ..strokeWidth = 9
               ..strokeJoin = StrokeJoin.round
-              ..color = Colors.black,
+              ..color = strokeColor,
           ),
         ),
         ShaderMask(
           blendMode: BlendMode.srcIn,
           shaderCallback: (rect) => LinearGradient(
-            colors: [Color.lerp(color, Colors.white, 0.45)!, color],
+            colors: colors,
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ).createShader(rect),
@@ -170,6 +193,8 @@ class ListenScreen extends StatefulWidget {
 
 class _ListenScreenState extends State<ListenScreen>
     with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+  AppMode _mode = AppMode.listen;
+
   final AudioRecorder _recorder = AudioRecorder();
   StreamSubscription<Uint8List>? _subscription;
   final AudioPlayer _player = AudioPlayer();
@@ -195,18 +220,29 @@ class _ListenScreenState extends State<ListenScreen>
   double? _displayBpm;
   int _rangeIndex = 0;
 
+  // --- Tap tempo (mode de secours) ---------------------------------------
+  // Instants des taps. Un silence de plus de 2 s remet à zéro.
+  final List<DateTime> _taps = [];
+  static const int _tapsNeeded = 8;
+  static const Duration _tapTimeout = Duration(seconds: 2);
+  // Rebond du dino à chaque tap.
+  final ValueNotifier<double> _dinoBounce = ValueNotifier(0);
+
   // --- Verrouillage ("le BPM est fixé") ---------------------------------
-  // Calé quand les 7 dernières estimations tiennent dans ±1,5 %. Une fois
+  // Calé quand les 7 dernières estimations (ou 8 taps) tiennent dans
+  // ±1,5 % (±3 % pour les taps, on n'est pas des machines). Une fois
   // calé : fête, micro coupé, chiffre figé, licornes en transe. Le bouton
-  // micro relance une recherche.
+  // relance une recherche.
   bool _locked = false;
   late final AnimationController _flash;
 
   // --- Horloge du beat --------------------------------------------------------
-  // Le détecteur nous dit quand tombe le prochain temps ; à partir de là on
-  // extrapole avec la période. Le ticker met à jour [_pulse] à chaque image.
+  // Le détecteur (ou les taps) nous dit quand tombe le prochain temps ; à
+  // partir de là on extrapole avec la période. Le ticker met à jour
+  // [_pulse] à chaque image, et [_tick] sert aux animations continues.
   late final Ticker _ticker;
   final ValueNotifier<double> _pulse = ValueNotifier(0);
+  final ValueNotifier<double> _tick = ValueNotifier(0);
   DateTime? _beatAnchor;
   double _beatPeriodMs = 500;
   // Numéro du temps courant : sa parité fait pencher les licornes d'un côté
@@ -239,22 +275,42 @@ class _ListenScreenState extends State<ListenScreen>
     _ticker.dispose();
     _flash.dispose();
     _pulse.dispose();
+    _tick.dispose();
+    _dinoBounce.dispose();
     _player.dispose();
     _recorder.dispose();
     super.dispose();
   }
 
   /// Appli passée en arrière-plan (bouton Accueil, écran éteint) : on
-  /// libère le micro. `inactive` est exclu : c'est l'état pendant la popup
+  /// libère tout. `inactive` est exclu : c'est l'état pendant la popup
   /// de permission, on ne veut pas couper à ce moment-là.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if ((state == AppLifecycleState.paused ||
-            state == AppLifecycleState.hidden) &&
-        (_isListening || _locked)) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
       _stop();
     }
   }
+
+  // --- Mode ---------------------------------------------------------------------
+
+  void _switchMode() {
+    _stop();
+    _taps.clear();
+    setState(() {
+      _mode = _mode == AppMode.listen ? AppMode.tap : AppMode.listen;
+      _displayBpm = null;
+      _lastResult = null;
+    });
+    if (_mode == AppMode.tap) {
+      // Les flammes vacillent en permanence : le ticker tourne.
+      _ticker.start();
+      WakelockPlus.enable();
+    }
+  }
+
+  // --- Écoute (mode normal) ---------------------------------------------------------
 
   Future<void> _start() async {
     if (!await _recorder.hasPermission()) {
@@ -285,7 +341,7 @@ class _ListenScreenState extends State<ListenScreen>
 
     // Garde l'écran allumé tant qu'on écoute.
     await WakelockPlus.enable();
-    _ticker.start();
+    if (!_ticker.isActive) _ticker.start();
 
     setState(() {
       _isListening = true;
@@ -353,7 +409,7 @@ class _ListenScreenState extends State<ListenScreen>
         } else {
           _history.add(result.bpm);
           if (_history.length > _historyLength) _history.removeAt(0);
-          _updateBeatClock(result);
+          _updateBeatClock(result.periodSeconds, result.secondsToNextBeat);
           _updateLock();
         }
       }
@@ -389,33 +445,6 @@ class _ListenScreenState extends State<ListenScreen>
     return sorted[sorted.length ~/ 2];
   }
 
-  // --- Beat -----------------------------------------------------------------
-
-  void _updateBeatClock(BpmResult result) {
-    final now = DateTime.now();
-    _beatPeriodMs = result.periodSeconds * 1000;
-    _beatAnchor = now.add(
-      Duration(
-        milliseconds:
-            (result.secondsToNextBeat * 1000).round() - _audioLatencyMs,
-      ),
-    );
-  }
-
-  void _onTick(Duration _) {
-    final anchor = _beatAnchor;
-    if (anchor == null) return;
-    final elapsed = DateTime.now().difference(anchor).inMicroseconds / 1000.0;
-    // Phase dans le temps courant, 0 = sur le beat, → 1 juste avant le
-    // suivant. Le modulo gère aussi le cas "avant l'ancre" (négatif).
-    final phase = ((elapsed / _beatPeriodMs) % 1.0 + 1.0) % 1.0;
-    _beatIndex = (elapsed / _beatPeriodMs).floor();
-    // Attaque franche, décroissance rapide : ça "tape".
-    _pulse.value = exp(-phase * 6);
-  }
-
-  // --- Verrouillage ---------------------------------------------------------
-
   void _updateLock() {
     if (_history.length < _historyLength) return;
     final med = _median(_history);
@@ -427,16 +456,6 @@ class _ListenScreenState extends State<ListenScreen>
       // Fixé : plus besoin d'écouter. Le bouton repasse en violet ; appuyer
       // dessus relance une recherche.
       _stopMic();
-    }
-  }
-
-  Future<void> _celebrate() async {
-    _flash.forward(from: 0);
-    unawaited(_player.play(AssetSource('sounds/sneeze.wav')));
-    // Deux secousses. Le paquet `vibration` pilote le moteur directement,
-    // indépendamment du réglage "vibration au toucher" du téléphone.
-    if (await Vibration.hasVibrator()) {
-      await Vibration.vibrate(pattern: [0, 180, 120, 180]);
     }
   }
 
@@ -456,6 +475,93 @@ class _ListenScreenState extends State<ListenScreen>
       _lastResult = null;
       _locked = false;
     });
+  }
+
+  // --- Tap tempo (mode de secours) -----------------------------------------------
+
+  void _onTap() {
+    final now = DateTime.now();
+    _dinoBounce.value = 1;
+
+    if (_locked) {
+      // Calé : un tap relance une nouvelle mesure.
+      _taps.clear();
+      _locked = false;
+      _beatAnchor = null;
+    } else if (_taps.isNotEmpty && now.difference(_taps.last) > _tapTimeout) {
+      _taps.clear();
+    }
+    _taps.add(now);
+    if (_taps.length > _tapsNeeded + 1) _taps.removeAt(0);
+
+    double? bpm;
+    if (_taps.length >= 2) {
+      final intervals = <double>[];
+      for (var i = 1; i < _taps.length; i++) {
+        intervals.add(
+          _taps[i].difference(_taps[i - 1]).inMicroseconds / 1000.0,
+        );
+      }
+      final meanMs = intervals.reduce((a, b) => a + b) / intervals.length;
+      bpm = 60000 / meanMs;
+
+      // Horloge du beat : le prochain temps est un intervalle après ce tap.
+      _beatPeriodMs = meanMs;
+      _beatAnchor = now;
+
+      // Calé quand on a assez de taps et qu'ils sont réguliers.
+      if (intervals.length >= _tapsNeeded - 1) {
+        final spread = (intervals.reduce(max) - intervals.reduce(min)) / meanMs;
+        // Un humain tape à ±5 % près : on tolère 12 % entre le plus court
+        // et le plus long intervalle.
+        if (spread < 0.12) {
+          _locked = true;
+          _celebrate();
+        }
+      }
+    }
+
+    setState(() => _displayBpm = bpm);
+  }
+
+  // --- Beat -----------------------------------------------------------------
+
+  void _updateBeatClock(double periodSeconds, double secondsToNextBeat) {
+    final now = DateTime.now();
+    _beatPeriodMs = periodSeconds * 1000;
+    _beatAnchor = now.add(
+      Duration(
+        milliseconds: (secondsToNextBeat * 1000).round() - _audioLatencyMs,
+      ),
+    );
+  }
+
+  void _onTick(Duration elapsed) {
+    _tick.value = elapsed.inMicroseconds / 1e6;
+    // Le rebond du dino retombe tout seul.
+    if (_dinoBounce.value > 0) {
+      _dinoBounce.value = max(0, _dinoBounce.value - 0.08);
+    }
+
+    final anchor = _beatAnchor;
+    if (anchor == null) return;
+    final ms = DateTime.now().difference(anchor).inMicroseconds / 1000.0;
+    // Phase dans le temps courant, 0 = sur le beat, → 1 juste avant le
+    // suivant. Le modulo gère aussi le cas "avant l'ancre" (négatif).
+    final phase = ((ms / _beatPeriodMs) % 1.0 + 1.0) % 1.0;
+    _beatIndex = (ms / _beatPeriodMs).floor();
+    // Attaque franche, décroissance rapide : ça "tape".
+    _pulse.value = exp(-phase * 6);
+  }
+
+  Future<void> _celebrate() async {
+    _flash.forward(from: 0);
+    unawaited(_player.play(AssetSource('sounds/sneeze.wav')));
+    // Deux secousses. Le paquet `vibration` pilote le moteur directement,
+    // indépendamment du réglage "vibration au toucher" du téléphone.
+    if (await Vibration.hasVibrator()) {
+      await Vibration.vibrate(pattern: [0, 180, 120, 180]);
+    }
   }
 
   // --- Interface ---------------------------------------------------------------
@@ -485,12 +591,37 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
-  /// TOMATOZOR façon tag : lettres penchées, contour noir, une couleur de
-  /// l'arc-en-ciel chacune, et la tête du dino dans les O.
+  /// Une flamme qui vacille en permanence (deux sinus décalés, pour que ça
+  /// n'ait pas l'air mécanique) et qui grossit sur le beat.
+  Widget _buildFlame({required int seed}) {
+    return ValueListenableBuilder<double>(
+      valueListenable: _tick,
+      builder: (context, t, _) {
+        final flicker =
+            0.10 * sin(t * 11 + seed) + 0.07 * sin(t * 27 + seed * 2.3);
+        final beat = _beatAnchor == null ? 0.0 : _pulse.value;
+        final scale = 1 + flicker + 0.4 * beat;
+        final angle = 0.12 * sin(t * 9 + seed * 1.7);
+        return Transform.rotate(
+          angle: angle,
+          child: Transform.scale(
+            scale: scale,
+            alignment: Alignment.bottomCenter,
+            child: const Text('🔥', style: TextStyle(fontSize: 60)),
+          ),
+        );
+      },
+    );
+  }
+
+  /// TOMATOZOR façon tag : lettres penchées, contour, une couleur de
+  /// l'arc-en-ciel chacune (ou feu en mode secours), et la tête du dino
+  /// dans les O.
   Widget _buildHeader(BuildContext context) {
     const word = 'TOMATOZOR';
     const tilts = [-8.0, 6.0, -5.0, 7.0, -6.0, 5.0, -7.0, 6.0, -4.0];
     const lifts = [0.0, -6.0, 4.0, -5.0, 5.0, -3.0, 3.0, -6.0, 2.0];
+    final fire = _mode == AppMode.tap;
 
     final letters = <Widget>[];
     var colorIndex = 0;
@@ -506,10 +637,18 @@ class _ListenScreenState extends State<ListenScreen>
             filterQuality: FilterQuality.medium,
           ),
         );
-      } else {
+      } else if (fire) {
         glyph = GraffitiLetter(
           ch,
-          color: kRainbow[colorIndex++ % kRainbow.length],
+          colors: kFire,
+          strokeColor: const Color(0xFF3A0000),
+          shadowColor: const Color(0xFF2A0A00),
+        );
+      } else {
+        final c = kRainbow[colorIndex++ % kRainbow.length];
+        glyph = GraffitiLetter(
+          ch,
+          colors: [Color.lerp(c, Colors.white, 0.45)!, c],
         );
       }
       letters.add(
@@ -521,16 +660,32 @@ class _ListenScreenState extends State<ListenScreen>
     }
 
     // FittedBox étire le mot à toute la largeur disponible.
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: FittedBox(
-        fit: BoxFit.contain,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: letters,
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: letters,
+            ),
+          ),
         ),
-      ),
+        if (fire)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              '⚠  MODE DE SECOURS  ⚠',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: kAlertRed,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 3,
+              ),
+            ),
+          ),
+      ],
     );
   }
 
@@ -565,6 +720,7 @@ class _ListenScreenState extends State<ListenScreen>
       valueListenable: _pulse,
       builder: (context, pulse, _) {
         final size = 18 + 26 * pulse;
+        final color = _mode == AppMode.tap ? const Color(0xFFFF6A00) : kPink;
         return SizedBox(
           height: 48,
           child: Center(
@@ -573,15 +729,10 @@ class _ListenScreenState extends State<ListenScreen>
               height: size,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: Color.lerp(
-                  const Color(0xFF7B2C6B),
-                  const Color(0xFFFF69B4),
-                  pulse,
-                ),
+                color: Color.lerp(const Color(0xFF7B2C6B), color, pulse),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFFF69B4)
-                        .withValues(alpha: 0.6 * pulse),
+                    color: color.withValues(alpha: 0.6 * pulse),
                     blurRadius: 24 * pulse,
                     spreadRadius: 4 * pulse,
                   ),
@@ -594,141 +745,248 @@ class _ListenScreenState extends State<ListenScreen>
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
+  /// Le bouton du mode normal : rond, violet au repos, rose quand il écoute.
+  Widget _buildMicButton() {
+    return SizedBox(
+      width: 120,
+      height: 120,
+      child: FilledButton(
+        onPressed: _isListening ? _stop : _start,
+        style: FilledButton.styleFrom(
+          shape: const CircleBorder(),
+          backgroundColor: _isListening ? kPink : kPurple,
+          foregroundColor: Colors.white,
+          elevation: _isListening ? 12 : 4,
+          shadowColor: _isListening ? kPink : kPurple,
+        ),
+        child: Icon(_isListening ? Icons.stop : Icons.mic, size: 56),
+      ),
+    );
+  }
+
+  /// Le bouton du mode secours : la tête du dino, qui rebondit au tap.
+  Widget _buildDinoButton() {
+    return GestureDetector(
+      onTapDown: (_) => _onTap(),
+      child: ValueListenableBuilder<double>(
+        valueListenable: _dinoBounce,
+        builder: (context, bounce, child) {
+          return Transform.scale(scale: 1 - 0.15 * bounce, child: child);
+        },
+        child: Container(
+          width: 180,
+          height: 180,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFFF6A00).withValues(alpha: 0.5),
+                blurRadius: 30,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: Image.asset(
+            'assets/images/dino_head.png',
+            filterQuality: FilterQuality.medium,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatus(BuildContext context) {
     final theme = Theme.of(context);
     final result = _lastResult;
     final buffered = _detector.bufferedSeconds;
 
+    final List<Widget> lines;
+    if (_mode == AppMode.tap) {
+      if (_locked) {
+        lines = [
+          Text('Calé ✓', style: theme.textTheme.bodyLarge),
+          const SizedBox(height: 4),
+          Text(
+            'Tape le dino pour recommencer',
+            style: theme.textTheme.bodySmall,
+          ),
+        ];
+      } else if (_taps.isEmpty) {
+        lines = [
+          Text('Tape le dino en rythme', style: theme.textTheme.bodyLarge),
+        ];
+      } else {
+        lines = [
+          Text(
+            'Taps : ${_taps.length} / ${_tapsNeeded + 1}',
+            style: theme.textTheme.bodyLarge,
+          ),
+          const SizedBox(height: 4),
+          Text('Continue, régulier…', style: theme.textTheme.bodySmall),
+        ];
+      }
+    } else if (_locked) {
+      lines = [
+        Text('Calé ✓', style: theme.textTheme.bodyLarge),
+        const SizedBox(height: 4),
+        Text(
+          'Appuie sur le micro pour recommencer',
+          style: theme.textTheme.bodySmall,
+        ),
+      ];
+    } else if (!_isListening) {
+      lines = [Text('Appuie sur le micro', style: theme.textTheme.bodyLarge)];
+    } else if (result == null) {
+      lines = [
+        Text(
+          'Analyse… ${buffered.toStringAsFixed(1)} s',
+          style: theme.textTheme.bodyLarge,
+        ),
+      ];
+    } else {
+      lines = [
+        Text(
+          'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
+          style: theme.textTheme.bodyLarge,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Candidats : ${result.candidates.take(3).map((c) => c.bpm.toStringAsFixed(0)).join('  ·  ')}',
+          style: theme.textTheme.bodySmall,
+        ),
+      ];
+    }
+    return SizedBox(height: 48, child: Column(children: lines));
+  }
+
+  Widget _buildRangeSelector(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      children: [
+        Text('Plage de tempo', style: theme.textTheme.labelLarge),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 4,
+          alignment: WrapAlignment.center,
+          children: [
+            for (var i = 0; i < kRanges.length; i++)
+              ChoiceChip(
+                label: Text(kRanges[i].label),
+                selected: i == _rangeIndex,
+                onSelected: (_) => _selectRange(i),
+              ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVuMeter(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        const Icon(Icons.mic, size: 16),
+        const SizedBox(width: 8),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _level,
+              minHeight: 8,
+              backgroundColor: Colors.white12,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 64,
+          child: Text(
+            '${_dbLevel.toStringAsFixed(0)} dB',
+            textAlign: TextAlign.right,
+            style: theme.textTheme.bodySmall,
+          ),
+        ),
+        // Place pour le bouton ⚠ en bas à droite.
+        const SizedBox(width: 44),
+      ],
+    );
+  }
+
+  /// Le petit bouton en bas à droite : ⚠ rouge pour passer en mode secours,
+  /// micro pour en revenir.
+  Widget _buildModeToggle() {
+    final tap = _mode == AppMode.tap;
+    return IconButton(
+      onPressed: _switchMode,
+      tooltip: tap ? 'Retour au mode micro' : 'Mode de secours (tap tempo)',
+      iconSize: 28,
+      color: tap ? kPink : kAlertRed,
+      icon: Icon(tap ? Icons.mic : Icons.warning_rounded),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final tap = _mode == AppMode.tap;
+
     return Scaffold(
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-          child: Column(
-            children: [
-              _buildHeader(context),
-              const Spacer(),
-
-              // --- Le gros chiffre, encadré par les licornes --------------
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
+        child: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+              child: Column(
                 children: [
-                  _buildUnicorn(flip: false),
-                  const SizedBox(width: 8),
-                  _buildBpmDigits(context),
-                  const SizedBox(width: 8),
-                  _buildUnicorn(flip: true),
-                ],
-              ),
-              Text('BPM', style: theme.textTheme.titleLarge),
-              _buildBeatDot(),
+                  _buildHeader(context),
+                  const Spacer(),
 
-              // --- Confiance / état ----------------------------------------
-              SizedBox(
-                height: 48,
-                child: Column(
-                  children: [
-                    if (_locked) ...[
-                      Text('Calé ✓', style: theme.textTheme.bodyLarge),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Appuie sur le micro pour recommencer',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ] else if (!_isListening)
-                      Text(
-                        'Appuie sur le micro',
-                        style: theme.textTheme.bodyLarge,
-                      )
-                    else if (result == null)
-                      Text(
-                        'Analyse… ${buffered.toStringAsFixed(1)} s',
-                        style: theme.textTheme.bodyLarge,
-                      )
-                    else ...[
-                      Text(
-                        'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
-                        style: theme.textTheme.bodyLarge,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'Candidats : ${result.candidates.take(3).map((c) => c.bpm.toStringAsFixed(0)).join('  ·  ')}',
-                        style: theme.textTheme.bodySmall,
-                      ),
+                  // --- Le gros chiffre, encadré par les licornes / flammes
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (tap)
+                        _buildFlame(seed: 1)
+                      else
+                        _buildUnicorn(flip: false),
+                      const SizedBox(width: 8),
+                      _buildBpmDigits(context),
+                      const SizedBox(width: 8),
+                      if (tap)
+                        _buildFlame(seed: 2)
+                      else
+                        _buildUnicorn(flip: true),
                     ],
+                  ),
+                  Text('BPM', style: theme.textTheme.titleLarge),
+                  _buildBeatDot(),
+                  _buildStatus(context),
+                  const Spacer(),
+
+                  // --- Le bouton, au centre ------------------------------
+                  if (tap) _buildDinoButton() else _buildMicButton(),
+                  const Spacer(),
+
+                  // --- Bas de l'écran ---------------------------------------
+                  if (!tap) ...[
+                    _buildRangeSelector(context),
+                    const SizedBox(height: 24),
+                    _buildVuMeter(context),
+                  ] else
+                    const SizedBox(height: 40),
+                  if (_error != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      _error!,
+                      style: const TextStyle(color: Colors.redAccent),
+                    ),
                   ],
-                ),
-              ),
-              const Spacer(),
-
-              // --- Le bouton rond, au centre ---------------------------------
-              SizedBox(
-                width: 120,
-                height: 120,
-                child: FilledButton(
-                  onPressed: _isListening ? _stop : _start,
-                  style: FilledButton.styleFrom(
-                    shape: const CircleBorder(),
-                    backgroundColor: _isListening ? kPink : kPurple,
-                    foregroundColor: Colors.white,
-                    elevation: _isListening ? 12 : 4,
-                    shadowColor: _isListening ? kPink : kPurple,
-                  ),
-                  child: Icon(_isListening ? Icons.stop : Icons.mic, size: 56),
-                ),
-              ),
-              const Spacer(),
-
-              // --- Sélecteur de plage --------------------------------------
-              Text('Plage de tempo', style: theme.textTheme.labelLarge),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 4,
-                alignment: WrapAlignment.center,
-                children: [
-                  for (var i = 0; i < kRanges.length; i++)
-                    ChoiceChip(
-                      label: Text(kRanges[i].label),
-                      selected: i == _rangeIndex,
-                      onSelected: (_) => _selectRange(i),
-                    ),
                 ],
               ),
-              const SizedBox(height: 24),
-
-              // --- Vu-mètre ---------------------------------------------------
-              Row(
-                children: [
-                  const Icon(Icons.mic, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: _level,
-                        minHeight: 8,
-                        backgroundColor: Colors.white12,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  SizedBox(
-                    width: 64,
-                    child: Text(
-                      '${_dbLevel.toStringAsFixed(0)} dB',
-                      textAlign: TextAlign.right,
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ),
-                ],
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 12),
-                Text(_error!, style: const TextStyle(color: Colors.redAccent)),
-              ],
-            ],
-          ),
+            ),
+            Positioned(right: 4, bottom: 4, child: _buildModeToggle()),
+          ],
         ),
       ),
     );

@@ -18,8 +18,14 @@ BLACK = (40, 18, 40)
 WHITE = (255, 255, 255)
 
 
+# Facteur de zoom : > 1 = la tête déborde du cadre (on veut qu'elle prenne
+# vraiment toute la place).
+ZOOM = 1.22
+CX, CY = 512, 560  # centre du zoom (le milieu de la tête)
+
+
 def p(x, y):
-    return (x * SS, y * SS)
+    return ((CX + (x - CX) * ZOOM) * SS, (CY + (y - CY) * ZOOM) * SS)
 
 
 def box(cx, cy, rx, ry):
@@ -85,9 +91,22 @@ icon.convert("RGB").save("assets/icon/icon.png")
 
 # Icône adaptative : Android rogne les bords (cercle, squircle…), on garde
 # la tête dans la zone sûre (~72 % du canevas).
-fg_small = fg.resize((int(S * 0.72), int(S * 0.72)), Image.LANCZOS)
+# Le calque plein cadre est dessiné sans zoom (le dino tient dans le
+# canevas), puis réduit à 80 % : rogné en rond, la tête remplit le disque.
+fg_plain = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+ZOOM = 1.0
+draw_dino(ImageDraw.Draw(fg_plain))
+fg_plain = fg_plain.resize((S, S), Image.LANCZOS)
+fg_small = fg_plain.resize((int(S * 0.80), int(S * 0.80)), Image.LANCZOS)
 adaptive = Image.new("RGBA", (S, S), (0, 0, 0, 0))
 off = (S - fg_small.width) // 2
-adaptive.alpha_composite(fg_small, (off, off + 20))
+adaptive.alpha_composite(fg_small, (off, off + 10))
 adaptive.save("assets/icon/icon_fg.png")
-print("OK icon.png + icon_fg.png")
+# Tête recadrée serrée, pour les O du titre et le bouton du mode secours.
+bbox = fg_plain.getbbox()
+head = fg_plain.crop(bbox)
+side = max(head.size) + 20
+sq = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+sq.alpha_composite(head, ((side - head.width) // 2, (side - head.height) // 2))
+sq.resize((512, 512), Image.LANCZOS).save("assets/images/dino_head.png")
+print("OK icon.png + icon_fg.png + dino_head.png")
