@@ -62,4 +62,25 @@ void main() {
     }
     print('  ==> $ok / ${files.length} justes');
   });
+
+  test('clips lents en preset 60-120', () {
+    var ok = 0, n = 0;
+    for (final f in files) {
+      final name = f.path.split('/').last.replaceAll('.wav', '');
+      final truth = double.parse(RegExp(r'(\d+)').firstMatch(name)!.group(1)!);
+      if (truth > 120) continue;
+      n++;
+      final pcm = readWav(f.path);
+      final d = BpmDetector(minBpm: 60, maxBpm: 120)..usePrior = false;
+      const chunk = 4096;
+      for (var i = 0; i < pcm.length; i += chunk) {
+        d.addSamples(Int16List.sublistView(pcm, i, (i + chunk).clamp(0, pcm.length)));
+      }
+      final r = d.estimate();
+      final v = r == null ? 'null' : verdict(r.bpm, truth);
+      if (v == '✓') ok++;
+      print('  [60-120] ${name.padRight(10)} vrai ${truth.toStringAsFixed(0).padLeft(3)} → ${r == null ? "null" : r.bpm.toStringAsFixed(1).padLeft(6)}  $v');
+    }
+    print('  ==> preset 60-120 : $ok / $n justes');
+  });
 }

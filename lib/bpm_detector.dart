@@ -173,14 +173,8 @@ class BpmDetector {
   static const double _keepRatio = 0.5;
 
   /// Corrélation brute minimale d'un candidat plus rapide, relative à celle
-  /// du meilleur, pour être préféré : de [_rawRatioMin] (candidat lent
-  /// improbable) à [_rawRatioMax] (candidat lent pleinement plausible).
+  /// du meilleur, pour être préféré.
   static const double _rawRatioMin = 0.5;
-  static const double _rawRatioMax = 0.85;
-
-  /// Idem pour le score harmonique (non pondéré) : de [_keepRatio] à
-  /// [_keepRatioMax] selon la plausibilité du candidat lent.
-  static const double _keepRatioMax = 0.95;
 
   /// Contraste backbeat minimal (r_mid(2L) − r_mid(L)) pour qu'un candidat
   /// soit retenu par la règle du backbeat plutôt que par la règle générale.
@@ -463,21 +457,14 @@ class BpmDetector {
     // évite de sauter sur une croche pointée (rapport 4/3), périodicité
     // réelle mais qui n'est pas le tempo. Le rapport 1,5 est admis : c'est
     // la relation entre le "÷3" et le "÷2" d'un même tempo.
-    // Pour sauter vers un candidat plus rapide, sa corrélation BRUTE doit
-    // tenir la comparaison avec celle du meilleur — d'autant plus que le
-    // candidat lent est plausible. À 62 BPM (improbable), un double à
-    // moitié aussi corrélé suffit ; à 90 ou 100 BPM (courants en rap), il
-    // faut une vraie pulsation au double (r ≥ 85 % de celle du lent). Des
-    // clics purs à 200 passent (r identique) ; une croche parasite à 180
-    // sur du rap à 90 ne passe pas (r faible).
-    final topBpm = 60 * framesPerSecond / top.$1;
-    final plaus = priorWeight(topBpm);
-    final rawBar = _rawRatioMin + (_rawRatioMax - _rawRatioMin) * plaus;
-    // Même logique sur le score harmonique, comparé SANS l'a priori : deux
-    // clics purs à 200 et 100 ont des scores identiques, et le petit malus
-    // de l'a priori au-dessus de 180 ne doit pas trancher à lui seul.
-    final scoreBar = _keepRatio + (_keepRatioMax - _keepRatio) * plaus;
-    final threshold = top.$2 * scoreBar;
+    // Le saut vers un candidat plus rapide se juge sur les scores SANS
+    // l'a priori (deux clics purs à 200 et 100 ont des scores identiques,
+    // le petit malus au-dessus de 180 ne doit pas trancher seul), avec une
+    // barre fixe. On a essayé de la rendre plus exigeante quand le lent est
+    // plausible, pour le rap à 90-100 : ça casse le hardcore à 195, dont
+    // les chiffres sont indiscernables de ceux du rap (97/195 vs 99/199).
+    // Le rap, c'est le preset 60-120.
+    final threshold = top.$2 * _keepRatio;
     var best = top;
     if (backbeatPick != null) {
       best = backbeatPick;
@@ -491,7 +478,7 @@ class BpmDetector {
         // du score du vrai tempo (terme 2L) : il faut aussi que sa propre
         // corrélation brute tienne la route, sinon des charleys discrets
         // suffiraient à doubler le tempo.
-        if (r[p.$1] < rawBar * r[top.$1]) continue;
+        if (r[p.$1] < _rawRatioMin * r[top.$1]) continue;
         if (_isIntegerRatio(top.$1 / p.$1)) best = p;
       }
     }
