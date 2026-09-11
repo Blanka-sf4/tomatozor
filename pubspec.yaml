@@ -63,6 +63,11 @@ flutter:
   uses-material-design: true
   assets:
     - assets/sounds/sneeze.wav
+    - assets/images/dino_head.png
+  fonts:
+    - family: RubikSprayPaint
+      fonts:
+        - asset: assets/fonts/RubikSprayPaint-Regular.ttf
 
 # Génération des icônes : `dart run flutter_launcher_icons`
 flutter_launcher_icons:

@@ -26,6 +26,9 @@ const kRainbow = [
   Color(0xFFFF2D9B),
 ];
 
+const kPurple = Color(0xFF7B2CBF);
+const kPink = Color(0xFFFF69B4);
+
 /// Logarithme en base 10 (Dart ne fournit que le log népérien).
 double log10(double x) => log(x) / ln10;
 
@@ -83,7 +86,12 @@ class TomatozorApp extends StatelessWidget {
 /// Texte peint avec un dégradé arc-en-ciel. [shift] (0..1) fait tourner
 /// les couleurs, pour l'animation.
 class RainbowText extends StatelessWidget {
-  const RainbowText(this.text, {super.key, required this.style, this.shift = 0});
+  const RainbowText(
+    this.text, {
+    super.key,
+    required this.style,
+    this.shift = 0,
+  });
   final String text;
   final TextStyle style;
   final double shift;
@@ -92,9 +100,7 @@ class RainbowText extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = kRainbow.length;
     final start = (shift * n).floor() % n;
-    final colors = [
-      for (var i = 0; i <= n; i++) kRainbow[(start + i) % n],
-    ];
+    final colors = [for (var i = 0; i <= n; i++) kRainbow[(start + i) % n]];
     return ShaderMask(
       blendMode: BlendMode.srcIn,
       shaderCallback: (rect) => LinearGradient(
@@ -103,6 +109,54 @@ class RainbowText extends StatelessWidget {
         end: Alignment.centerRight,
       ).createShader(rect),
       child: Text(text, style: style.copyWith(color: Colors.white)),
+    );
+  }
+}
+
+/// Une lettre façon tag : ombre portée, contour noir épais, remplissage
+/// en dégradé d'une couleur de l'arc-en-ciel vers sa version claire.
+class GraffitiLetter extends StatelessWidget {
+  const GraffitiLetter(this.char, {super.key, required this.color});
+  final String char;
+  final Color color;
+
+  static const _style = TextStyle(
+    fontFamily: 'RubikSprayPaint',
+    fontSize: 72,
+    height: 1.0,
+  );
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        Transform.translate(
+          offset: const Offset(5, 7),
+          child: Text(
+            char,
+            style: _style.copyWith(color: const Color(0xFF1E0630)),
+          ),
+        ),
+        Text(
+          char,
+          style: _style.copyWith(
+            foreground: Paint()
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 9
+              ..strokeJoin = StrokeJoin.round
+              ..color = Colors.black,
+          ),
+        ),
+        ShaderMask(
+          blendMode: BlendMode.srcIn,
+          shaderCallback: (rect) => LinearGradient(
+            colors: [Color.lerp(color, Colors.white, 0.45)!, color],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+          ).createShader(rect),
+          child: Text(char, style: _style.copyWith(color: Colors.white)),
+        ),
+      ],
     );
   }
 }
@@ -143,11 +197,9 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Verrouillage ("le BPM est fixé") ---------------------------------
   // Calé quand les 7 dernières estimations tiennent dans ±1,5 %. Une fois
-  // calé, on arrête de chercher : le chiffre est figé jusqu'au Stop (ou
-  // un changement de plage). Le détecteur continue de tourner, mais
-  // uniquement pour recaler la phase du point de beat.
+  // calé : fête, micro coupé, chiffre figé, licornes en transe. Le bouton
+  // micro relance une recherche.
   bool _locked = false;
-  double _lockedBpm = 0;
   late final AnimationController _flash;
 
   // --- Horloge du beat --------------------------------------------------------
@@ -157,6 +209,9 @@ class _ListenScreenState extends State<ListenScreen>
   final ValueNotifier<double> _pulse = ValueNotifier(0);
   DateTime? _beatAnchor;
   double _beatPeriodMs = 500;
+  // Numéro du temps courant : sa parité fait pencher les licornes d'un côté
+  // puis de l'autre.
+  int _beatIndex = 0;
   // Le son met un peu de temps à arriver du micro jusqu'à nous : on avance
   // l'horloge d'autant. À ajuster à l'oreille si le point est en retard.
   static const int _audioLatencyMs = 60;
@@ -196,7 +251,7 @@ class _ListenScreenState extends State<ListenScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if ((state == AppLifecycleState.paused ||
             state == AppLifecycleState.hidden) &&
-        _isListening) {
+        (_isListening || _locked)) {
       _stop();
     }
   }
@@ -240,20 +295,31 @@ class _ListenScreenState extends State<ListenScreen>
     });
   }
 
-  Future<void> _stop() async {
+  /// Coupe le micro seulement. Le point de beat et les licornes continuent
+  /// sur l'horloge interne : on connaît la période et la phase, pas besoin
+  /// du son pour extrapoler.
+  Future<void> _stopMic() async {
     await _subscription?.cancel();
     _subscription = null;
     await _recorder.stop();
-    await WakelockPlus.disable();
-    _ticker.stop();
-    _pulse.value = 0;
     if (mounted) {
       setState(() {
         _isListening = false;
-        _locked = false;
         _level = 0.0;
         _dbLevel = -60.0;
       });
+    }
+  }
+
+  /// Arrêt complet : micro, horloge du beat, écran libre.
+  Future<void> _stop() async {
+    await _stopMic();
+    await WakelockPlus.disable();
+    _ticker.stop();
+    _pulse.value = 0;
+    _beatAnchor = null;
+    if (mounted) {
+      setState(() => _locked = false);
     }
   }
 
@@ -282,12 +348,7 @@ class _ListenScreenState extends State<ListenScreen>
       if (result != null) {
         _logResult(result);
         if (_locked) {
-          // Figé : on ne touche plus au chiffre. On recale juste l'horloge
-          // du beat, et seulement si le détecteur est d'accord avec le
-          // tempo figé (à 3 % près) — sinon sa phase ne veut rien dire.
-          if ((result.bpm / _lockedBpm - 1).abs() < 0.03) {
-            _updateBeatClock(result);
-          }
+          // Un dernier paquet peut arriver pendant la coupure du micro.
           result = null;
         } else {
           _history.add(result.bpm);
@@ -311,7 +372,9 @@ class _ListenScreenState extends State<ListenScreen>
   void _logResult(BpmResult result) {
     // Trace lisible avec `adb logcat -s flutter`, pour le debug.
     final cands = result.candidates
-        .map((c) => '${c.bpm.toStringAsFixed(1)}(${c.score.toStringAsFixed(2)})')
+        .map(
+          (c) => '${c.bpm.toStringAsFixed(1)}(${c.score.toStringAsFixed(2)})',
+        )
         .join(' ');
     debugPrint(
       'BPM ${result.bpm.toStringAsFixed(1)} '
@@ -342,11 +405,11 @@ class _ListenScreenState extends State<ListenScreen>
   void _onTick(Duration _) {
     final anchor = _beatAnchor;
     if (anchor == null) return;
-    final elapsed =
-        DateTime.now().difference(anchor).inMicroseconds / 1000.0;
+    final elapsed = DateTime.now().difference(anchor).inMicroseconds / 1000.0;
     // Phase dans le temps courant, 0 = sur le beat, → 1 juste avant le
     // suivant. Le modulo gère aussi le cas "avant l'ancre" (négatif).
     final phase = ((elapsed / _beatPeriodMs) % 1.0 + 1.0) % 1.0;
+    _beatIndex = (elapsed / _beatPeriodMs).floor();
     // Attaque franche, décroissance rapide : ça "tape".
     _pulse.value = exp(-phase * 6);
   }
@@ -356,13 +419,14 @@ class _ListenScreenState extends State<ListenScreen>
   void _updateLock() {
     if (_history.length < _historyLength) return;
     final med = _median(_history);
-    final spread =
-        (_history.reduce(max) - _history.reduce(min)) / med;
+    final spread = (_history.reduce(max) - _history.reduce(min)) / med;
 
     if (spread < 0.015) {
       _locked = true;
-      _lockedBpm = med;
       _celebrate();
+      // Fixé : plus besoin d'écouter. Le bouton repasse en violet ; appuyer
+      // dessus relance une recherche.
+      _stopMic();
     }
   }
 
@@ -385,6 +449,7 @@ class _ListenScreenState extends State<ListenScreen>
     _detector.usePrior = index == 0;
     // La plage change le résultat : on repart sur un historique vierge.
     _history.clear();
+    if (_locked) _stop();
     setState(() {
       _rangeIndex = index;
       _displayBpm = null;
@@ -395,21 +460,77 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Interface ---------------------------------------------------------------
 
-  Widget _buildTitle(BuildContext context) {
-    final style = Theme.of(context).textTheme.headlineSmall!.copyWith(
-      fontWeight: FontWeight.w900,
-      letterSpacing: 3,
-      fontStyle: FontStyle.italic,
+  /// Une licorne. Sage au repos ; calée, elle saute et se penche à chaque
+  /// temps, d'un côté puis de l'autre. [flip] la retourne (elles se font
+  /// face) et inverse le sens de la danse (elles dansent en miroir).
+  Widget _buildUnicorn({required bool flip}) {
+    return ValueListenableBuilder<double>(
+      valueListenable: _pulse,
+      builder: (context, pulse, _) {
+        final dancing = _locked;
+        final side = (_beatIndex.isEven ? 1 : -1) * (flip ? -1 : 1);
+        final angle = dancing ? side * 0.4 * pulse : 0.0;
+        final scale = dancing ? 1 + 0.35 * pulse : 1.0;
+        final lift = dancing ? -16 * pulse : 0.0;
+        Widget u = const Text('🦄', style: TextStyle(fontSize: 60));
+        if (flip) u = Transform.flip(flipX: true, child: u);
+        return Transform.translate(
+          offset: Offset(0, lift),
+          child: Transform.rotate(
+            angle: angle,
+            child: Transform.scale(scale: scale, child: u),
+          ),
+        );
+      },
     );
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const Text('🦄', style: TextStyle(fontSize: 26)),
-        const SizedBox(width: 10),
-        RainbowText('TOMATOZOR', style: style),
-        const SizedBox(width: 10),
-        const Text('🦄', style: TextStyle(fontSize: 26)),
-      ],
+  }
+
+  /// TOMATOZOR façon tag : lettres penchées, contour noir, une couleur de
+  /// l'arc-en-ciel chacune, et la tête du dino dans les O.
+  Widget _buildHeader(BuildContext context) {
+    const word = 'TOMATOZOR';
+    const tilts = [-8.0, 6.0, -5.0, 7.0, -6.0, 5.0, -7.0, 6.0, -4.0];
+    const lifts = [0.0, -6.0, 4.0, -5.0, 5.0, -3.0, 3.0, -6.0, 2.0];
+
+    final letters = <Widget>[];
+    var colorIndex = 0;
+    for (var i = 0; i < word.length; i++) {
+      final ch = word[i];
+      Widget glyph;
+      if (ch == 'O') {
+        glyph = Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: Image.asset(
+            'assets/images/dino_head.png',
+            height: 78,
+            filterQuality: FilterQuality.medium,
+          ),
+        );
+      } else {
+        glyph = GraffitiLetter(
+          ch,
+          color: kRainbow[colorIndex++ % kRainbow.length],
+        );
+      }
+      letters.add(
+        Transform.translate(
+          offset: Offset(0, lifts[i]),
+          child: Transform.rotate(angle: tilts[i] * pi / 180, child: glyph),
+        ),
+      );
+    }
+
+    // FittedBox étire le mot à toute la largeur disponible.
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: FittedBox(
+        fit: BoxFit.contain,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: letters,
+        ),
+      ),
     );
   }
 
@@ -459,7 +580,8 @@ class _ListenScreenState extends State<ListenScreen>
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFFFF69B4).withValues(alpha: 0.6 * pulse),
+                    color: const Color(0xFFFF69B4)
+                        .withValues(alpha: 0.6 * pulse),
                     blurRadius: 24 * pulse,
                     spreadRadius: 4 * pulse,
                   ),
@@ -479,125 +601,134 @@ class _ListenScreenState extends State<ListenScreen>
     final buffered = _detector.bufferedSeconds;
 
     return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        title: _buildTitle(context),
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const Spacer(),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+          child: Column(
+            children: [
+              _buildHeader(context),
+              const Spacer(),
 
-            // --- Le gros chiffre + le point qui bat ----------------------
-            _buildBpmDigits(context),
-            Text('BPM', style: theme.textTheme.titleLarge),
-            _buildBeatDot(),
-
-            // --- Confiance / état ----------------------------------------
-            SizedBox(
-              height: 48,
-              child: Column(
+              // --- Le gros chiffre, encadré par les licornes --------------
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (!_isListening)
-                    Text('Appuie sur le micro', style: theme.textTheme.bodyLarge)
-                  else if (result == null)
-                    Text(
-                      'Analyse… ${buffered.toStringAsFixed(1)} s',
-                      style: theme.textTheme.bodyLarge,
-                    )
-                  else if (_locked) ...[
-                    Text('Calé ✓', style: theme.textTheme.bodyLarge),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Stop ou autre plage pour relancer la recherche',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ] else ...[
-                    Text(
-                      'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
-                      style: theme.textTheme.bodyLarge,
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Candidats : ${result.candidates.take(3).map((c) => c.bpm.toStringAsFixed(0)).join('  ·  ')}',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ],
+                  _buildUnicorn(flip: false),
+                  const SizedBox(width: 8),
+                  _buildBpmDigits(context),
+                  const SizedBox(width: 8),
+                  _buildUnicorn(flip: true),
                 ],
               ),
-            ),
-            const Spacer(),
+              Text('BPM', style: theme.textTheme.titleLarge),
+              _buildBeatDot(),
 
-            // --- Le bouton rond, au centre ---------------------------------
-            SizedBox(
-              width: 120,
-              height: 120,
-              child: FilledButton(
-                onPressed: _isListening ? _stop : _start,
-                style: FilledButton.styleFrom(
-                  shape: const CircleBorder(),
-                  backgroundColor: _isListening
-                      ? theme.colorScheme.error
-                      : theme.colorScheme.primary,
-                ),
-                child: Icon(
-                  _isListening ? Icons.stop : Icons.mic,
-                  size: 56,
+              // --- Confiance / état ----------------------------------------
+              SizedBox(
+                height: 48,
+                child: Column(
+                  children: [
+                    if (_locked) ...[
+                      Text('Calé ✓', style: theme.textTheme.bodyLarge),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Appuie sur le micro pour recommencer',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ] else if (!_isListening)
+                      Text(
+                        'Appuie sur le micro',
+                        style: theme.textTheme.bodyLarge,
+                      )
+                    else if (result == null)
+                      Text(
+                        'Analyse… ${buffered.toStringAsFixed(1)} s',
+                        style: theme.textTheme.bodyLarge,
+                      )
+                    else ...[
+                      Text(
+                        'Confiance : ${(result.confidence * 100).toStringAsFixed(0)} %',
+                        style: theme.textTheme.bodyLarge,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Candidats : ${result.candidates.take(3).map((c) => c.bpm.toStringAsFixed(0)).join('  ·  ')}',
+                        style: theme.textTheme.bodySmall,
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            ),
-            const Spacer(),
+              const Spacer(),
 
-            // --- Sélecteur de plage --------------------------------------
-            Text('Plage de tempo', style: theme.textTheme.labelLarge),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 4,
-              alignment: WrapAlignment.center,
-              children: [
-                for (var i = 0; i < kRanges.length; i++)
-                  ChoiceChip(
-                    label: Text(kRanges[i].label),
-                    selected: i == _rangeIndex,
-                    onSelected: (_) => _selectRange(i),
+              // --- Le bouton rond, au centre ---------------------------------
+              SizedBox(
+                width: 120,
+                height: 120,
+                child: FilledButton(
+                  onPressed: _isListening ? _stop : _start,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    backgroundColor: _isListening ? kPink : kPurple,
+                    foregroundColor: Colors.white,
+                    elevation: _isListening ? 12 : 4,
+                    shadowColor: _isListening ? kPink : kPurple,
                   ),
-              ],
-            ),
-            const SizedBox(height: 24),
+                  child: Icon(_isListening ? Icons.stop : Icons.mic, size: 56),
+                ),
+              ),
+              const Spacer(),
 
-            // --- Vu-mètre ---------------------------------------------------
-            Row(
-              children: [
-                const Icon(Icons.mic, size: 16),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(4),
-                    child: LinearProgressIndicator(
-                      value: _level,
-                      minHeight: 8,
-                      backgroundColor: Colors.white12,
+              // --- Sélecteur de plage --------------------------------------
+              Text('Plage de tempo', style: theme.textTheme.labelLarge),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                alignment: WrapAlignment.center,
+                children: [
+                  for (var i = 0; i < kRanges.length; i++)
+                    ChoiceChip(
+                      label: Text(kRanges[i].label),
+                      selected: i == _rangeIndex,
+                      onSelected: (_) => _selectRange(i),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // --- Vu-mètre ---------------------------------------------------
+              Row(
+                children: [
+                  const Icon(Icons.mic, size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(4),
+                      child: LinearProgressIndicator(
+                        value: _level,
+                        minHeight: 8,
+                        backgroundColor: Colors.white12,
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                SizedBox(
-                  width: 64,
-                  child: Text(
-                    '${_dbLevel.toStringAsFixed(0)} dB',
-                    textAlign: TextAlign.right,
-                    style: theme.textTheme.bodySmall,
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: 64,
+                    child: Text(
+                      '${_dbLevel.toStringAsFixed(0)} dB',
+                      textAlign: TextAlign.right,
+                      style: theme.textTheme.bodySmall,
+                    ),
                   ),
-                ),
+                ],
+              ),
+              if (_error != null) ...[
+                const SizedBox(height: 12),
+                Text(_error!, style: const TextStyle(color: Colors.redAccent)),
               ],
-            ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Text(_error!, style: const TextStyle(color: Colors.redAccent)),
             ],
-          ],
+          ),
         ),
       ),
     );
