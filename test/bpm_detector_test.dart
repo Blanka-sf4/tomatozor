@@ -56,6 +56,51 @@ Int16List synth(
   return pcm;
 }
 
+/// Un pattern hip-hop / boom-bap à [bpm] : kick sur 1 et le "et" de 2
+/// (808 longue et molle), caisse claire sèche sur 2 et 4, charleys en
+/// croches. Le tempo est porté par la caisse claire, pas par le kick.
+Int16List synthHipHop(double bpm, {double seconds = 12}) {
+  final rng = Random(7);
+  final total = (seconds * fs).round();
+  final out = Float64List(total);
+  final beat = 60 / bpm * fs;
+
+  void hit(double pos, double freq, double amp, double dur, double decay) {
+    final start = pos.round();
+    for (var i = 0; i < (dur * fs).round() && start + i < total; i++) {
+      final t = i / fs;
+      out[start + i] += amp * sin(2 * pi * freq * t) * exp(-t / decay);
+    }
+  }
+
+  void snare(double pos) {
+    final start = pos.round();
+    for (var i = 0; i < (0.12 * fs).round() && start + i < total; i++) {
+      final t = i / fs;
+      // Corps à 200 Hz + bruit filtré grossièrement : "crack"
+      out[start + i] +=
+          0.35 * sin(2 * pi * 200 * t) * exp(-t / 0.04) +
+          0.3 * (rng.nextDouble() * 2 - 1) * exp(-t / 0.05);
+    }
+  }
+
+  for (var bar = 0.0; bar < total; bar += 4 * beat) {
+    hit(bar, 55, 0.5, 0.35, 0.12); // kick 808 sur le 1
+    hit(bar + 1.5 * beat, 55, 0.4, 0.3, 0.1); // kick sur le "et" de 2
+    snare(bar + 1 * beat);
+    snare(bar + 3 * beat);
+    for (var e = 0; e < 8; e++) {
+      hit(bar + e * beat / 2, 7000, 0.12, 0.02, 0.004); // charleys
+    }
+  }
+  final pcm = Int16List(total);
+  for (var i = 0; i < total; i++) {
+    final v = out[i] + (rng.nextDouble() * 2 - 1) * 0.01;
+    pcm[i] = (v.clamp(-1.0, 1.0) * 32767).round();
+  }
+  return pcm;
+}
+
 /// Pousse le signal par paquets de 4096, comme le ferait le micro.
 BpmResult? run(BpmDetector d, Int16List pcm) {
   const chunk = 4096;
@@ -129,6 +174,14 @@ void main() {
     final offBeat = (next / 0.5) % 1.0;
     expect(min(offBeat, 1 - offBeat), lessThan(0.06));
   });
+
+  for (final target in [75.0, 85.0, 92.0]) {
+    test('hip-hop à $target BPM, auto : trouve $target (pas le double)', () {
+      final res = run(BpmDetector(), synthHipHop(target));
+      expect(res, isNotNull);
+      expect(res!.bpm, closeTo(target, 2));
+    });
+  }
 
   test('pas assez de son → null', () {
     final d = BpmDetector();

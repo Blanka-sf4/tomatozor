@@ -50,12 +50,21 @@ class BpmDetector {
     this.bufferSeconds = 8.0,
     this.minBpm = 60,
     this.maxBpm = 450,
-    double lowPassHz = 200,
+    double lowPassHz = 150,
+    double snareLowHz = 250,
+    double snareHighHz = 1200,
+    double kickHz = 100,
+    this.snareWeight = 0.6,
   }) : _bufferFrames = (bufferSeconds * sampleRate / hopSize).round(),
-       // Filtre passe-bas à un pôle : y += a * (x - y). Le coefficient
+       // Filtres passe-bas à un pôle : y += a * (x - y). Le coefficient
        // découle de la fréquence de coupure voulue.
-       _lpAlpha = 1 - exp(-2 * pi * lowPassHz / sampleRate) {
+       _lpAlpha = 1 - exp(-2 * pi * lowPassHz / sampleRate),
+       _midAlpha = 1 - exp(-2 * pi * snareHighHz / sampleRate),
+       _hpAlpha = 1 - exp(-2 * pi * snareLowHz / sampleRate),
+       _kickAlpha = 1 - exp(-2 * pi * kickHz / sampleRate) {
     _onsets = Float64List(_bufferFrames);
+    _onsetsMid = Float64List(_bufferFrames);
+    _onsetsKick = Float64List(_bufferFrames);
   }
 
   final int sampleRate;
@@ -65,6 +74,9 @@ class BpmDetector {
 
   /// Durée de son gardée en mémoire pour l'analyse.
   final double bufferSeconds;
+
+  /// Trace de debug des candidats (tests).
+  bool debugTrace = false;
 
   /// Plage de tempo cherchée. Modifiable à chaud : n'affecte que [estimate].
   double minBpm;
@@ -102,6 +114,15 @@ class BpmDetector {
 
   final int _bufferFrames;
   final double _lpAlpha;
+  final double _midAlpha;
+  final double _hpAlpha;
+  final double _kickAlpha;
+
+  /// Poids de la bande "caisse claire" (150-1200 Hz) dans le flux
+  /// d'onsets, par rapport à la bande "kick" (< 150 Hz). Le hip-hop, le
+  /// reggae, la trap portent leur rythme sur la caisse claire : sans cette
+  /// bande, le détecteur est quasi aveugle sur ces styles.
+  final double snareWeight;
 
   /// Nombre de trames par seconde.
   double get framesPerSecond => sampleRate / hopSize;
@@ -111,18 +132,39 @@ class BpmDetector {
 
   // --- état du pipeline ---------------------------------------------------
 
-  // Sortie du passe-bas.
+  // Sorties des passe-bas (< 150 Hz et < 1200 Hz). La bande caisse claire
+  // est la différence des deux.
   double _lp = 0;
+  double _mid = 0;
+  double _mid2 = 0; // second pôle du passe-bas de la bande caisse claire
+  double _hp1 = 0; // états des deux passe-haut (coupent le kick)
+  double _hp2 = 0;
+  double _kick1 = 0; // bande kick propre (deux pôles à 100 Hz)
+  double _kick2 = 0;
+  double _frameEnergyKick = 0;
+  double _prevLogRmsKick = log(_rmsFloor);
 
-  // Trame en cours de remplissage.
+  // Trame en cours de remplissage, par bande.
   double _frameEnergy = 0;
+  double _frameEnergyMid = 0;
   int _frameCount = 0;
 
-  // RMS de la trame précédente (pour le flux).
+  // RMS de la trame précédente (pour le flux), par bande.
   double _prevLogRms = log(_rmsFloor);
+  double _prevLogRmsMid = log(_rmsFloor);
 
-  // Buffer circulaire du flux d'onsets : une valeur par trame.
+  /// Niveaux RMS de la dernière trame, par bande (pour le diagnostic).
+  double lastRmsLow = 0;
+  double lastRmsMid = 0;
+
+  // Buffers circulaires du flux d'onsets : une valeur par trame. Le
+  // premier combine kick + caisse claire ; le second ne garde que la
+  // caisse claire, pour repérer le backbeat.
   late final Float64List _onsets;
+  late final Float64List _onsetsMid;
+  // Bande "kick propre" (< 100 Hz, deux pôles), uniquement pour le test de
+  // coïncidence kick / caisse claire.
+  late final Float64List _onsetsKick;
   int _writePos = 0;
   int _filled = 0;
 
@@ -135,12 +177,26 @@ class BpmDetector {
   // trop bas → on saute sur les subdivisions (×2).
   static const double _keepRatio = 0.5;
 
+  /// Contraste backbeat minimal (r_mid(2L) − r_mid(L)) pour qu'un candidat
+  /// soit retenu par la règle du backbeat plutôt que par la règle générale.
+  static const double _backbeatMinContrast = 0.15;
+
   /// Vide toute la mémoire (changement de morceau, redémarrage).
   void reset() {
     _lp = 0;
+    _mid = 0;
+    _mid2 = 0;
+    _hp1 = 0;
+    _hp2 = 0;
+    _kick1 = 0;
+    _kick2 = 0;
+    _frameEnergyKick = 0;
+    _prevLogRmsKick = log(_rmsFloor);
     _frameEnergy = 0;
+    _frameEnergyMid = 0;
     _frameCount = 0;
     _prevLogRms = log(_rmsFloor);
+    _prevLogRmsMid = log(_rmsFloor);
     _writePos = 0;
     _filled = 0;
   }
@@ -152,9 +208,23 @@ class BpmDetector {
       //    les basses (kick, basse), là où le tempo est le plus net.
       final x = s / 32768.0;
       _lp += _lpAlpha * (x - _lp);
+      // Bande caisse claire 250-1200 Hz : passe-bas à deux pôles puis deux
+      // passe-haut en cascade (un passe-haut = signal − sa version
+      // passe-bas). Pentes de 12 dB/octave des deux côtés : le kick à
+      // 50-60 Hz n'y entre pratiquement plus, les charleys non plus.
+      _mid += _midAlpha * (x - _mid);
+      _mid2 += _midAlpha * (_mid - _mid2);
+      _hp1 += _hpAlpha * (_mid2 - _hp1);
+      final h1 = _mid2 - _hp1;
+      _hp2 += _hpAlpha * (h1 - _hp2);
+      final snare = h1 - _hp2;
+      _kick1 += _kickAlpha * (x - _kick1);
+      _kick2 += _kickAlpha * (_kick1 - _kick2);
 
-      // 2. Accumuler l'énergie de la trame.
+      // 2. Accumuler l'énergie de la trame, par bande.
       _frameEnergy += _lp * _lp;
+      _frameEnergyMid += snare * snare;
+      _frameEnergyKick += _kick2 * _kick2;
       _frameCount++;
 
       if (_frameCount == hopSize) {
@@ -168,18 +238,32 @@ class BpmDetector {
     //    doux et un passage fort donnent des onsets comparables).
     final rms = sqrt(_frameEnergy / hopSize);
     final logRms = log(rms + _rmsFloor);
+    final rmsMid = sqrt(_frameEnergyMid / hopSize);
+    final logRmsMid = log(rmsMid + _rmsFloor);
+    lastRmsLow = rms;
+    lastRmsMid = rmsMid;
 
-    // 4. Flux d'onset = montée d'énergie par rapport à la trame précédente.
-    //    On ignore les descentes (max 0) : seule l'attaque nous intéresse.
-    final flux = max(0.0, logRms - _prevLogRms);
+    // 4. Flux d'onset = montée d'énergie par rapport à la trame précédente,
+    //    bande kick + bande caisse claire. On ignore les descentes (max 0) :
+    //    seule l'attaque nous intéresse.
+    final fluxMid = max(0.0, logRmsMid - _prevLogRmsMid);
+    final flux = max(0.0, logRms - _prevLogRms) + snareWeight * fluxMid;
     _prevLogRms = logRms;
+    _prevLogRmsMid = logRmsMid;
+    final logRmsKick = log(sqrt(_frameEnergyKick / hopSize) + _rmsFloor);
+    final fluxKick = max(0.0, logRmsKick - _prevLogRmsKick);
+    _prevLogRmsKick = logRmsKick;
 
     // 5. Ranger dans le buffer circulaire.
     _onsets[_writePos] = flux;
+    _onsetsMid[_writePos] = fluxMid;
+    _onsetsKick[_writePos] = fluxKick;
     _writePos = (_writePos + 1) % _bufferFrames;
     if (_filled < _bufferFrames) _filled++;
 
     _frameEnergy = 0;
+    _frameEnergyMid = 0;
+    _frameEnergyKick = 0;
     _frameCount = 0;
   }
 
@@ -202,9 +286,13 @@ class BpmDetector {
     // (moyenne retirée) : sinon l'autocorrélation est dominée par la
     // composante continue et tous les lags se ressemblent.
     final raw = Float64List(n);
+    final rawMid = Float64List(n);
+    final rawKick = Float64List(n);
     final start = (_writePos - n + _bufferFrames) % _bufferFrames;
     for (var i = 0; i < n; i++) {
       raw[i] = _onsets[(start + i) % _bufferFrames];
+      rawMid[i] = _onsetsMid[(start + i) % _bufferFrames];
+      rawKick[i] = _onsetsKick[(start + i) % _bufferFrames];
     }
 
     // Lissage par un noyau triangulaire sur 5 trames (~30 ms). Les onsets
@@ -215,21 +303,40 @@ class BpmDetector {
     const kernel = [1.0, 2.0, 3.0, 2.0, 1.0];
     const kernelSum = 9.0;
     final x = Float64List(n);
-    double mean = 0;
+    final xMid = Float64List(n);
+    final xLow = Float64List(n); // bande kick propre (< 100 Hz)
+    double mean = 0, meanMid = 0;
     for (var i = 0; i < n; i++) {
-      double acc = 0;
+      double acc = 0, accMid = 0, accKick = 0;
       for (var k = 0; k < kernel.length; k++) {
         final j = i + k - 2;
-        if (j >= 0 && j < n) acc += kernel[k] * raw[j];
+        if (j >= 0 && j < n) {
+          acc += kernel[k] * raw[j];
+          accMid += kernel[k] * rawMid[j];
+          accKick += kernel[k] * rawKick[j];
+        }
       }
       x[i] = acc / kernelSum;
+      xMid[i] = accMid / kernelSum;
+      xLow[i] = accKick / kernelSum;
       mean += x[i];
+      meanMid += xMid[i];
     }
     mean /= n;
-    double energy = 0;
+    meanMid /= n;
+    double meanKick = 0;
+    for (var i = 0; i < n; i++) {
+      meanKick += xLow[i];
+    }
+    meanKick /= n;
+    double energy = 0, energyMid = 0, energyKick = 0;
     for (var i = 0; i < n; i++) {
       x[i] -= mean;
+      xMid[i] -= meanMid;
+      xLow[i] -= meanKick;
       energy += x[i] * x[i];
+      energyMid += xMid[i] * xMid[i];
+      energyKick += xLow[i] * xLow[i];
     }
     if (energy <= 0) return null;
 
@@ -243,14 +350,45 @@ class BpmDetector {
     // On la calcule jusqu'à 3 × lagMax pour le score harmonique.
     final maxLag = min(3 * lagMax + 1, n - 1);
     final r = Float64List(maxLag + 1);
+    final rMid = Float64List(maxLag + 1);
+    final rKick = Float64List(maxLag + 1);
     final norm = energy / n;
+    final normMid = energyMid > 0 ? energyMid / n : 1.0;
+    final normKick = energyKick > 0 ? energyKick / n : 1.0;
     for (var lag = 1; lag <= maxLag; lag++) {
-      double sum = 0;
+      double sum = 0, sumMid = 0, sumKick = 0;
       for (var t = 0; t + lag < n; t++) {
         sum += x[t] * x[t + lag];
+        sumMid += xMid[t] * xMid[t + lag];
+        sumKick += xLow[t] * xLow[t + lag];
       }
       r[lag] = sum / (n - lag) / norm;
+      rMid[lag] = energyMid > 0 ? sumMid / (n - lag) / normMid : 0.0;
+      rKick[lag] = energyKick > 0 ? sumKick / (n - lag) / normKick : 0.0;
     }
+
+    /// Contraste "un temps sur deux" d'une bande pour un candidat de
+    /// période [lag] : r(2L) − r(L), avec un voisinage pour l'arrondi.
+    double contrast(Float64List rr, int lag) {
+      if (2 * lag + 1 > maxLag) return 0;
+      double near(int c, int rad) {
+        var best = -1.0;
+        for (var l = c - rad; l <= c + rad; l++) {
+          if (l >= 1 && l <= maxLag && rr[l] > best) best = rr[l];
+        }
+        return best;
+      }
+
+      return near(2 * lag, 1) - near(lag, 1);
+    }
+
+    /// Preuve de backbeat d'un candidat : l'asymétrie de la bande caisse
+    /// claire MOINS celle de la bande kick. Si le kick montre la même
+    /// asymétrie, c'est son clic qu'on entend dans les médiums, pas une
+    /// caisse claire (un morceau kick seul passerait sinon pour un backbeat
+    /// au double du tempo).
+    double backbeatEvidence(int lag) =>
+        contrast(rMid, lag) - max(0.0, contrast(rKick, lag));
 
     // Score harmonique : un vrai tempo a aussi des pics à 2× et 3× sa
     // période. Ça favorise le tempo "fondamental" par rapport aux pics
@@ -288,6 +426,37 @@ class BpmDetector {
     if (peaks.isEmpty) return null;
     peaks.sort((a, b) => b.$3.compareTo(a.$3));
 
+    // Backbeat : la caisse claire sur 2 et 4 tombe UN temps sur deux. Pour
+    // un candidat de période L (un temps), la bande caisse claire seule a
+    // donc une corrélation forte à 2L et faible à L : le contraste
+    // r_mid(2L) − r_mid(L) est nettement positif pour le vrai tempo, et
+    // proche de zéro pour son double (2L devient L) comme pour sa moitié
+    // (L et 2L y sont tous deux des multiples de la période caisse claire).
+    // Ça vaut pour le hip-hop à 75, la house à 125 et la DnB à 172. Sans
+    // caisse claire (clics, kick seul, speedcore), tous les contrastes sont
+    // ~0 et on suit la règle générale.
+    final top = peaks.first;
+    (int, double, double)? backbeatPick;
+    var bestBb = _backbeatMinContrast;
+    for (final p in peaks) {
+      if (p.$3 < top.$3 * 0.35) continue;
+      final bb = backbeatEvidence(p.$1);
+      if (debugTrace) {
+        // ignore: avoid_print
+        print(
+          '  cand ${(60 * framesPerSecond / p.$1).toStringAsFixed(1)} '
+          'score ${p.$3.toStringAsFixed(2)} '
+          'mid ${contrast(rMid, p.$1).toStringAsFixed(2)} '
+          'kick ${contrast(rKick, p.$1).toStringAsFixed(2)} '
+          'preuve ${bb.toStringAsFixed(2)}',
+        );
+      }
+      if (bb > bestBb) {
+        bestBb = bb;
+        backbeatPick = p;
+      }
+    }
+
     // Choix du tempo : la périodicité LA PLUS RAPIDE qui reste forte,
     // PARMI LES SUBDIVISIONS ENTIÈRES du meilleur pic.
     //
@@ -302,12 +471,15 @@ class BpmDetector {
     // évite de sauter sur une croche pointée (rapport 4/3), périodicité
     // réelle mais qui n'est pas le tempo. Le rapport 1,5 est admis : c'est
     // la relation entre le "÷3" et le "÷2" d'un même tempo.
-    final top = peaks.first;
     final threshold = top.$3 * _keepRatio;
     var best = top;
-    for (final p in peaks) {
-      if (p.$3 < threshold || p.$1 >= best.$1) continue;
-      if (_isIntegerRatio(top.$1 / p.$1)) best = p;
+    if (backbeatPick != null) {
+      best = backbeatPick;
+    } else {
+      for (final p in peaks) {
+        if (p.$3 < threshold || p.$1 >= best.$1) continue;
+        if (_isIntegerRatio(top.$1 / p.$1)) best = p;
+      }
     }
 
     // Interpolation parabolique : on ajuste une parabole sur les trois
