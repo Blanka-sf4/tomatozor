@@ -6,6 +6,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:record/record.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
@@ -53,6 +54,10 @@ const kFireBackground = [
   Color(0xFF8A1500),
   Color(0xFFE04A00),
 ];
+
+/// Lien de téléchargement de l'appli, inclus dans le texte de partage.
+/// À REMPLIR quand l'APK sera hébergé (GitHub Releases, Drive…).
+const kDownloadUrl = 'https://LIEN-A-VENIR';
 
 const kYellowSign = Color(0xFFFFD600);
 const kGreenSign = Color(0xFF2ECC40);
@@ -124,6 +129,78 @@ class _Flame {
   final double speed;
   final double size;
   final double spin;
+}
+
+/// Les néons de la fête : des traits, cercles et éclairs lumineux de
+/// toutes les couleurs, qui clignotent et tournent, plus une bordure qui
+/// pulse. [t] : progression 0 → 1 du flash.
+class _PartyPainter extends CustomPainter {
+  _PartyPainter(this.t, this.seed);
+  final double t;
+  final int seed;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rng = Random(seed);
+    final fade = t < 0.85 ? 1.0 : 1 - (t - 0.85) / 0.15;
+
+    // Bordure néon qui pulse
+    final border = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 14
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 14)
+      ..shader = SweepGradient(
+        colors: [...kRainbow, kRainbow.first],
+        transform: GradientRotation(t * 6.28),
+      ).createShader(Offset.zero & size);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(28)),
+      border..color = Colors.white.withValues(alpha: fade),
+    );
+
+    // Néons : 42 formes, chacune avec sa couleur, sa vitesse de
+    // clignotement et sa rotation.
+    for (var i = 0; i < 42; i++) {
+      final color = kRainbow[i % kRainbow.length];
+      final x = rng.nextDouble() * size.width;
+      final y = rng.nextDouble() * size.height;
+      final len = 30 + rng.nextDouble() * 90;
+      final angle = rng.nextDouble() * 6.28 + t * (rng.nextBool() ? 2 : -2);
+      final blinkRate = 6 + rng.nextDouble() * 10;
+      final phase = rng.nextDouble() * 6.28;
+      final on = (sin(t * blinkRate * 6.28 + phase) + 1) / 2;
+      final alpha = (0.25 + 0.75 * on) * fade;
+      final paint = Paint()
+        ..color = color.withValues(alpha: alpha)
+        ..strokeWidth = 5
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
+      final kind = i % 3;
+      if (kind == 0) {
+        final dx = cos(angle) * len / 2, dy = sin(angle) * len / 2;
+        canvas.drawLine(Offset(x - dx, y - dy), Offset(x + dx, y + dy), paint);
+      } else if (kind == 1) {
+        canvas.drawCircle(
+          Offset(x, y),
+          len / 4,
+          paint..style = PaintingStyle.stroke,
+        );
+      } else {
+        // Éclair : zigzag de 4 segments
+        final path = Path()..moveTo(x, y);
+        var px = x, py = y;
+        for (var k = 0; k < 4; k++) {
+          px += cos(angle + (k.isEven ? 0.6 : -0.6)) * len / 4;
+          py += sin(angle + (k.isEven ? 0.6 : -0.6)) * len / 4;
+          path.lineTo(px, py);
+        }
+        canvas.drawPath(path, paint..style = PaintingStyle.stroke);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_PartyPainter old) => old.t != t || old.seed != seed;
 }
 
 /// Les deux modes de l'appli.
@@ -901,7 +978,10 @@ class _ListenScreenState extends State<ListenScreen>
     return 'head';
   }
 
+  int _partySeed = 0;
+
   Future<void> _celebrate(Animal animal) async {
+    _partySeed = _rng.nextInt(1 << 30);
     // Il hurle de joie pendant toute la durée du cri.
     _setTemporaryFace('yell', Duration(milliseconds: animal.ms));
     _flash.forward(from: 0);
@@ -1038,7 +1118,22 @@ class _ListenScreenState extends State<ListenScreen>
             ),
           ),
           _buildSubtitle('PARO EDITION', fire: true, fontSize: 20),
-          _buildMascot(),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              _buildMascot(),
+              const SizedBox(width: 8),
+              const Text(
+                'je l\'ai entendu faire prout..',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                  color: Color(0xFFFFD9A0),
+                ),
+              ),
+            ],
+          ),
         ],
       ],
     );
@@ -1298,7 +1393,7 @@ class _ListenScreenState extends State<ListenScreen>
     // Pendant l'analyse, les pupilles sautent d'un côté à l'autre sur le
     // beat ; une fois calé, c'est toute la tête qui hoche.
     final analysing = !tap && _isListening && !_locked && _lastResult != null;
-    final nodding = !tap && _locked && _beatAnchor != null;
+    final nodding = _locked && _beatAnchor != null;
 
     final dino = GestureDetector(
       onTapDown: (_) {
@@ -1705,18 +1800,29 @@ class _ListenScreenState extends State<ListenScreen>
                               ),
                             ),
                             subtitle: Text(_fmtDate(e.at)),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline),
-                              color: Colors.redAccent,
-                              onPressed: () async {
-                                if (_playingFile == e.file) {
-                                  await _clipPlayer.stop();
-                                  _playingFile = null;
-                                }
-                                await _store.remove(e);
-                                setDialogState(() {});
-                                if (mounted) setState(() {});
-                              },
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  icon: const Icon(Icons.share),
+                                  color: kGreenSign,
+                                  tooltip: 'Partager le son et son BPM',
+                                  onPressed: () => _shareEntry(e),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.delete_outline),
+                                  color: Colors.redAccent,
+                                  onPressed: () async {
+                                    if (_playingFile == e.file) {
+                                      await _clipPlayer.stop();
+                                      _playingFile = null;
+                                    }
+                                    await _store.remove(e);
+                                    setDialogState(() {});
+                                    if (mounted) setState(() {});
+                                  },
+                                ),
+                              ],
                             ),
                           ),
                         const SizedBox(height: 4),
@@ -1737,6 +1843,20 @@ class _ListenScreenState extends State<ListenScreen>
     // Fermer le popup arrête la lecture.
     await _clipPlayer.stop();
     _playingFile = null;
+  }
+
+  /// Partage l'extrait audio (WAV 8 s) avec son BPM et le lien de l'appli.
+  Future<void> _shareEntry(HistoryEntry e) async {
+    final text =
+        '${fmtBpm(e.bpm)} BPM 🔥\n'
+        'Trouvé avec TOMATOZOR Pastelle Edition — gratuit ici : $kDownloadUrl';
+    await SharePlus.instance.share(
+      ShareParams(
+        text: text,
+        files: [XFile(e.file, mimeType: 'audio/wav')],
+        subject: 'TOMATOZOR — ${fmtBpm(e.bpm)} BPM',
+      ),
+    );
   }
 
   String _fmtDate(DateTime d) {
@@ -2027,6 +2147,22 @@ class _ListenScreenState extends State<ListenScreen>
                     ),
                   ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
+                  // La fête : néons de toutes les couleurs pendant le flash.
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: AnimatedBuilder(
+                        animation: _flash,
+                        builder: (context, _) {
+                          if (!_flash.isAnimating) {
+                            return const SizedBox.shrink();
+                          }
+                          return CustomPaint(
+                            painter: _PartyPainter(_flash.value, _partySeed),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),

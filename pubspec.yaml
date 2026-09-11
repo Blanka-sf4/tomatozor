@@ -39,6 +39,7 @@ dependencies:
   audioplayers: ^6.8.1
   vibration: ^3.2.1
   path_provider: ^2.1.6
+  share_plus: ^13.3.0
 
 dev_dependencies:
   flutter_test:
