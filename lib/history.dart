@@ -36,6 +36,11 @@ class HistoryStore {
   final List<HistoryEntry> entries = [];
   double? lastTapBpm;
 
+  /// Décalage du point de beat, en ms (positif = plus tôt). Réglable dans
+  /// Options ; la valeur par défaut compense la latence micro typique.
+  static const int defaultLatencyMs = 60;
+  int latencyMs = defaultLatencyMs;
+
   Directory? _dir;
 
   Future<Directory> _directory() async {
@@ -63,6 +68,7 @@ class HistoryStore {
               .where((e) => File(e.file).existsSync()),
         );
       lastTapBpm = (j['lastTapBpm'] as num?)?.toDouble();
+      latencyMs = (j['latencyMs'] as num?)?.toInt() ?? defaultLatencyMs;
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -76,6 +82,7 @@ class HistoryStore {
       jsonEncode({
         'entries': entries.map((e) => e.toJson()).toList(),
         'lastTapBpm': lastTapBpm,
+        'latencyMs': latencyMs,
       }),
     );
   }
@@ -99,6 +106,11 @@ class HistoryStore {
     entries.remove(entry);
     final f = File(entry.file);
     if (await f.exists()) await f.delete();
+    await _save();
+  }
+
+  Future<void> setLatencyMs(int ms) async {
+    latencyMs = ms;
     await _save();
   }
 

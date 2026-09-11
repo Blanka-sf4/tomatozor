@@ -291,8 +291,7 @@ class _ListenScreenState extends State<ListenScreen>
   // puis de l'autre.
   int _beatIndex = 0;
   // Le son met un peu de temps à arriver du micro jusqu'à nous : on avance
-  // l'horloge d'autant. À ajuster à l'oreille si le point est en retard.
-  static const int _audioLatencyMs = 60;
+  // l'horloge d'autant. Réglable dans Options (persisté dans le store).
 
   @override
   void initState() {
@@ -598,12 +597,23 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Beat -----------------------------------------------------------------
 
+  /// Change le décalage et déplace l'ancre du beat immédiatement, pour que
+  /// le point réagisse pendant qu'on règle.
+  void _setLatency(int ms) {
+    final clamped = ms.clamp(-200, 200);
+    final delta = clamped - _store.latencyMs;
+    _store.setLatencyMs(clamped);
+    if (_beatAnchor != null) {
+      _beatAnchor = _beatAnchor!.subtract(Duration(milliseconds: delta));
+    }
+  }
+
   void _updateBeatClock(double periodSeconds, double secondsToNextBeat) {
     final now = DateTime.now();
     _beatPeriodMs = periodSeconds * 1000;
     _beatAnchor = now.add(
       Duration(
-        milliseconds: (secondsToNextBeat * 1000).round() - _audioLatencyMs,
+        milliseconds: (secondsToNextBeat * 1000).round() - _store.latencyMs,
       ),
     );
   }
@@ -1246,6 +1256,102 @@ class _ListenScreenState extends State<ListenScreen>
     return '${two(d.day)}/${two(d.month)}/${d.year}  ${two(d.hour)}:${two(d.minute)}';
   }
 
+  /// Réglage du décalage du point de beat, avec un petit point témoin qui
+  /// bat en même temps que le grand.
+  Widget _buildLatencyControl(void Function(void Function()) setDialogState) {
+    final ms = _store.latencyMs;
+    void set(int v) {
+      _setLatency(v);
+      setDialogState(() {});
+    }
+
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ValueListenableBuilder<double>(
+              valueListenable: _pulse,
+              builder: (context, pulse, _) {
+                final size = 12 + 14 * pulse;
+                return SizedBox(
+                  width: 30,
+                  height: 30,
+                  child: Center(
+                    child: Container(
+                      width: size,
+                      height: size,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color.lerp(
+                          const Color(0xFF7B2C6B),
+                          kPink,
+                          pulse,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(width: 8),
+            const Text(
+              'Décalage du point de beat',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        const Text(
+          'Point en retard sur la musique → augmente',
+          style: TextStyle(fontSize: 12, color: Colors.white70),
+        ),
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed: () => set(ms - 10),
+            ),
+            Expanded(
+              child: Slider(
+                value: ms.toDouble(),
+                min: -200,
+                max: 200,
+                divisions: 40,
+                label: '${ms >= 0 ? '+' : ''}$ms ms',
+                onChanged: (v) => set(v.round()),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed: () => set(ms + 10),
+            ),
+          ],
+        ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text(
+              '${ms >= 0 ? '+' : ''}$ms ms',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+            const SizedBox(width: 16),
+            TextButton.icon(
+              onPressed: ms == HistoryStore.defaultLatencyMs
+                  ? null
+                  : () => set(HistoryStore.defaultLatencyMs),
+              icon: const Icon(Icons.restart_alt, size: 18),
+              label: const Text('Réinitialiser'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   /// Popup à bordure arc-en-ciel : une case par plage, une seule cochée.
   Future<void> _showOptions() async {
     await showDialog<void>(
@@ -1313,6 +1419,8 @@ class _ListenScreenState extends State<ListenScreen>
                               setDialogState(() {});
                             },
                           ),
+                        const Divider(height: 20),
+                        _buildLatencyControl(setDialogState),
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),
