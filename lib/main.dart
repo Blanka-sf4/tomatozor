@@ -338,6 +338,11 @@ class _ListenScreenState extends State<ListenScreen>
   DateTime? _tapLockedAt;
   static const Duration _tapLockHold = Duration(seconds: 3);
 
+  /// Vrai quand les 3 s sont passées : on peut relancer.
+  bool get _tapUnlocked =>
+      _tapLockedAt != null &&
+      DateTime.now().difference(_tapLockedAt!) >= _tapLockHold;
+
   // Flammes crachées par le dino (mode secours, calé) : des particules
   // nées à sa bouche, qui partent vers l'avant en grossissant.
   final List<_Flame> _flames = [];
@@ -760,6 +765,13 @@ class _ListenScreenState extends State<ListenScreen>
         if (spread < 0.12) {
           _locked = true;
           _tapLockedAt = now;
+          // Au bout des 3 s : rafraîchir l'écran (halo vert, texte) et
+          // prévenir d'une petite vibration.
+          Timer(_tapLockHold, () {
+            if (!mounted || !_locked) return;
+            setState(() {});
+            Vibration.vibrate(duration: 50);
+          });
           _celebrate(kPig);
           _store.setLastTapBpm(bpm);
         }
@@ -807,16 +819,23 @@ class _ListenScreenState extends State<ListenScreen>
     // nouvelle toutes les ~70 ms ; chacune vit 0,8 s.
     final spitting = _mode == AppMode.tap && _locked;
     if (spitting && t >= _nextFlameAt) {
+      // Pendant les 3 s de blocage : le brasier. Ensuite : quelques
+      // flammèches, et le halo vert dit "tu peux taper".
+      final intense = !_tapUnlocked;
       _flames.add(
         _Flame(
           t,
           (_rng.nextDouble() - 0.5) * 1.1, // ±32° autour de "droit devant"
-          70 + _rng.nextDouble() * 60,
-          22 + _rng.nextDouble() * 16,
+          intense ? 70 + _rng.nextDouble() * 60 : 40 + _rng.nextDouble() * 30,
+          intense ? 22 + _rng.nextDouble() * 16 : 14 + _rng.nextDouble() * 8,
           (_rng.nextDouble() - 0.5) * 3,
         ),
       );
-      _nextFlameAt = t + 0.05 + _rng.nextDouble() * 0.05;
+      _nextFlameAt =
+          t +
+          (intense
+              ? 0.05 + _rng.nextDouble() * 0.05
+              : 0.3 + _rng.nextDouble() * 0.3);
     }
     _flames.removeWhere((f) => t - f.born > 0.8);
     // Vie des mascottes : un petit événement toutes les 2,5 à 6 s.
@@ -1030,7 +1049,7 @@ class _ListenScreenState extends State<ListenScreen>
   Widget _buildMascot() {
     final tap = _mode == AppMode.tap;
     return SizedBox(
-      height: 80,
+      height: 96,
       child: ValueListenableBuilder<String>(
         valueListenable: _mascotFrame,
         builder: (context, frame, _) {
@@ -1051,7 +1070,7 @@ class _ListenScreenState extends State<ListenScreen>
             },
             child: Image.asset(
               'assets/images/$frame.png',
-              height: 75,
+              height: 90,
               filterQuality: FilterQuality.medium,
               gaplessPlayback: true,
             ),
@@ -1232,6 +1251,8 @@ class _ListenScreenState extends State<ListenScreen>
     final Color glow;
     if (_saturated && _isListening) {
       glow = kAlertRed;
+    } else if (tap && _locked && _tapUnlocked) {
+      glow = kGreenSign;
     } else if (tap) {
       glow = const Color(0xFFFF6A00);
     } else if (_isListening) {
@@ -1315,7 +1336,9 @@ class _ListenScreenState extends State<ListenScreen>
               BoxShadow(
                 color: glow.withValues(alpha: active ? 0.6 : 0.45),
                 blurRadius: active ? 36 : 24,
-                spreadRadius: active ? 4 : 1,
+                spreadRadius: tap && _locked && _tapUnlocked
+                    ? 12
+                    : (active ? 4 : 1),
               ),
             ],
           ),
@@ -1409,7 +1432,7 @@ class _ListenScreenState extends State<ListenScreen>
           Text('Calé ✓', style: theme.textTheme.bodyLarge),
           const SizedBox(height: 4),
           Text(
-            'Laisse-le cracher… puis tape-le pour recommencer',
+            _tapUnlocked ? 'Tape-le pour recommencer !' : 'Laisse-le cracher…',
             style: theme.textTheme.bodySmall,
           ),
         ];
