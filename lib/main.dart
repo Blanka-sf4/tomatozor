@@ -34,6 +34,26 @@ const kFire = [
   Color(0xFFFFE066),
 ];
 
+/// Fond kawaii du mode normal : pastel arc-en-ciel, du rose au lavande.
+const kKawaiiBackground = [
+  Color(0xFFFFC1E3),
+  Color(0xFFFFD6A5),
+  Color(0xFFFFF5BA),
+  Color(0xFFC1FFD7),
+  Color(0xFFB5DEFF),
+  Color(0xFFE0C3FC),
+];
+
+/// Fond du mode secours : braises, du noir au orange.
+const kFireBackground = [
+  Color(0xFF0E0000),
+  Color(0xFF3A0600),
+  Color(0xFF8A1500),
+  Color(0xFFE04A00),
+];
+
+const kYellowSign = Color(0xFFFFD600);
+
 const kPurple = Color(0xFF7B2CBF);
 const kPink = Color(0xFFFF69B4);
 const kAlertRed = Color(0xFFE53935);
@@ -690,14 +710,18 @@ class _ListenScreenState extends State<ListenScreen>
               ),
             ),
           ),
-          _buildSubtitle('PARO EDITION', fire: true),
+          _buildSubtitle('PARO EDITION', fire: true, fontSize: 20),
         ],
       ],
     );
   }
 
   /// Une ligne de sous-titre en petites lettres graffiti.
-  Widget _buildSubtitle(String text, {required bool fire}) {
+  Widget _buildSubtitle(
+    String text, {
+    required bool fire,
+    double fontSize = 30,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(top: 4),
       child: FittedBox(
@@ -707,11 +731,11 @@ class _ListenScreenState extends State<ListenScreen>
           children: [
             for (final ch in text.split(''))
               if (ch == ' ')
-                const SizedBox(width: 12)
+                SizedBox(width: fontSize * 0.4)
               else
                 GraffitiLetter(
                   ch,
-                  fontSize: 30,
+                  fontSize: fontSize,
                   colors: fire ? kFire : const [Color(0xFFFFF0F8), kPink],
                   strokeColor: fire ? const Color(0xFF3A0000) : Colors.black,
                   shadowColor: fire
@@ -733,6 +757,12 @@ class _ListenScreenState extends State<ListenScreen>
         final breath = 0.5 + 0.5 * sin(t * 2.2);
         final beat = _beatAnchor == null ? 0.0 : _pulse.value;
         final glow = 0.55 + 0.25 * breath + 0.4 * beat;
+        final fire = _mode == AppMode.tap;
+        // Sur les braises : jaune pâle à halo rose. Sur le pastel : rose
+        // vif à halo blanc/jaune, sinon ça se noie dans le fond.
+        final color = fire ? const Color(0xFFFFF7B0) : const Color(0xFFE6007E);
+        final halo = fire ? kPink : Colors.white;
+        final halo2 = fire ? const Color(0xFFFF6A00) : const Color(0xFFFFE600);
         return FittedBox(
           fit: BoxFit.scaleDown,
           child: Text(
@@ -741,12 +771,12 @@ class _ListenScreenState extends State<ListenScreen>
               fontFamily: 'RubikSprayPaint',
               fontSize: 40,
               height: 1.0,
-              color: const Color(0xFFFFF7B0),
+              color: color,
               shadows: [
-                Shadow(color: kPink.withValues(alpha: glow), blurRadius: 8),
-                Shadow(color: kPink.withValues(alpha: glow), blurRadius: 20),
+                Shadow(color: halo.withValues(alpha: glow), blurRadius: 8),
+                Shadow(color: halo.withValues(alpha: glow), blurRadius: 20),
                 Shadow(
-                  color: const Color(0xFFFF6A00).withValues(alpha: glow * 0.8),
+                  color: halo2.withValues(alpha: glow * 0.8),
                   blurRadius: 40,
                 ),
               ],
@@ -947,16 +977,46 @@ class _ListenScreenState extends State<ListenScreen>
     return SizedBox(height: 48, child: Column(children: lines));
   }
 
-  /// Le bouton Options, en bas : ouvre le popup des plages de tempo.
-  Widget _buildOptionsButton() {
-    return OutlinedButton.icon(
-      onPressed: _showOptions,
-      icon: const Icon(Icons.tune),
-      label: Text('Options  ·  ${kRanges[_rangeIndex].label}'),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: Colors.white,
-        side: const BorderSide(color: kPurple, width: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+  /// Le panneau jaune OPTION, en bas à gauche, en face du ⚠ rouge.
+  Widget _buildOptionsSign() {
+    return GestureDetector(
+      onTap: _showOptions,
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+        decoration: BoxDecoration(
+          color: kYellowSign,
+          border: Border.all(color: Colors.black, width: 3),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black38,
+              blurRadius: 6,
+              offset: Offset(2, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'OPTION',
+              style: TextStyle(
+                color: Colors.black,
+                fontWeight: FontWeight.w900,
+                fontSize: 15,
+                letterSpacing: 1.5,
+              ),
+            ),
+            Text(
+              kRanges[_rangeIndex].label,
+              style: const TextStyle(
+                color: Colors.black87,
+                fontWeight: FontWeight.w600,
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -966,68 +1026,77 @@ class _ListenScreenState extends State<ListenScreen>
     await showDialog<void>(
       context: context,
       builder: (context) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          child: Container(
-            // La bordure arc-en-ciel : un dégradé en fond, et la boîte
-            // sombre par-dessus avec 4 px de marge.
-            padding: const EdgeInsets.all(4),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: kRainbow,
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(24),
+        return Theme(
+          data: ThemeData(
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: kPink,
+              brightness: Brightness.dark,
             ),
+          ),
+          child: Dialog(
+            backgroundColor: Colors.transparent,
             child: Container(
-              padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+              // La bordure arc-en-ciel : un dégradé en fond, et la boîte
+              // sombre par-dessus avec 4 px de marge.
+              padding: const EdgeInsets.all(4),
               decoration: BoxDecoration(
-                color: const Color(0xFF1A0A24),
-                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  colors: kRainbow,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(24),
               ),
-              child: StatefulBuilder(
-                builder: (context, setDialogState) {
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      RainbowText(
-                        'Plage de tempo',
-                        style: Theme.of(context).textTheme.titleLarge!.copyWith(
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: 2,
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(8, 16, 8, 8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1A0A24),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: StatefulBuilder(
+                  builder: (context, setDialogState) {
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        RainbowText(
+                          'Plage de tempo',
+                          style: Theme.of(context).textTheme.titleLarge!
+                              .copyWith(
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 2,
+                              ),
                         ),
-                      ),
-                      const SizedBox(height: 8),
-                      for (var i = 0; i < kRanges.length; i++)
-                        CheckboxListTile(
-                          value: i == _rangeIndex,
-                          activeColor: kRainbow[i % kRainbow.length],
-                          title: Text(
-                            kRanges[i].label,
-                            style: TextStyle(
-                              fontWeight: i == _rangeIndex
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
+                        const SizedBox(height: 8),
+                        for (var i = 0; i < kRanges.length; i++)
+                          CheckboxListTile(
+                            value: i == _rangeIndex,
+                            activeColor: kRainbow[i % kRainbow.length],
+                            title: Text(
+                              kRanges[i].label,
+                              style: TextStyle(
+                                fontWeight: i == _rangeIndex
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
                             ),
+                            subtitle: i == 0
+                                ? const Text('Détection large, a priori 90-180')
+                                : null,
+                            dense: true,
+                            onChanged: (_) {
+                              _selectRange(i);
+                              setDialogState(() {});
+                            },
                           ),
-                          subtitle: i == 0
-                              ? const Text('Détection large, a priori 90-180')
-                              : null,
-                          dense: true,
-                          onChanged: (_) {
-                            _selectRange(i);
-                            setDialogState(() {});
-                          },
+                        const SizedBox(height: 4),
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('OK'),
                         ),
-                      const SizedBox(height: 4),
-                      TextButton(
-                        onPressed: () => Navigator.of(context).pop(),
-                        child: const Text('OK'),
-                      ),
-                    ],
-                  );
-                },
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -1051,65 +1120,88 @@ class _ListenScreenState extends State<ListenScreen>
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final tap = _mode == AppMode.tap;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
+    // Mode normal : fond pastel, donc texte foncé (thème clair).
+    // Mode secours : braises, texte clair (thème sombre).
+    final theme = ThemeData(
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: tap ? const Color(0xFFFF6A00) : kPink,
+        brightness: tap ? Brightness.dark : Brightness.light,
+      ),
+      scaffoldBackgroundColor: Colors.transparent,
+    );
+
+    // Le Builder donne un contexte situé SOUS le Theme : sans lui,
+    // Theme.of(context) dans les méthodes _build* verrait l'ancien thème.
+    return Theme(
+      data: theme,
+      child: Builder(
+        builder: (context) => Scaffold(
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: tap ? kFireBackground : kKawaiiBackground,
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: SafeArea(
+              child: Stack(
                 children: [
-                  _buildHeader(context),
-                  const Spacer(),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Column(
+                      children: [
+                        _buildHeader(context),
+                        const Spacer(),
 
-                  // --- Le gros chiffre, encadré par les licornes / flammes
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      if (tap)
-                        _buildFlame(seed: 1)
-                      else
-                        _buildUnicorn(flip: false),
-                      const SizedBox(width: 8),
-                      _buildBpmDigits(context),
-                      const SizedBox(width: 8),
-                      if (tap)
-                        _buildFlame(seed: 2)
-                      else
-                        _buildUnicorn(flip: true),
-                    ],
-                  ),
-                  Text('BPM', style: theme.textTheme.titleLarge),
-                  _buildBeatDot(),
-                  _buildStatus(context),
-                  const Spacer(),
+                        // --- Le gros chiffre, encadré par les licornes / flammes
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            if (tap)
+                              _buildFlame(seed: 1)
+                            else
+                              _buildUnicorn(flip: false),
+                            const SizedBox(width: 8),
+                            _buildBpmDigits(context),
+                            const SizedBox(width: 8),
+                            if (tap)
+                              _buildFlame(seed: 2)
+                            else
+                              _buildUnicorn(flip: true),
+                          ],
+                        ),
+                        Text('BPM', style: theme.textTheme.titleLarge),
+                        _buildBeatDot(),
+                        _buildStatus(context),
+                        const Spacer(),
 
-                  // --- Le bouton, au centre ------------------------------
-                  _buildDinoButton(),
-                  const Spacer(),
+                        // --- Le bouton, au centre ------------------------------
+                        _buildDinoButton(),
+                        const Spacer(),
 
-                  // --- Bas de l'écran ---------------------------------------
-                  if (!tap)
-                    _buildOptionsButton()
-                  else
-                    const SizedBox(height: 48),
-                  const SizedBox(height: 20),
-                  _buildNeonBanner(),
-                  if (_error != null) ...[
-                    const SizedBox(height: 12),
-                    Text(
-                      _error!,
-                      style: const TextStyle(color: Colors.redAccent),
+                        // --- Bas de l'écran ---------------------------------------
+                        const SizedBox(height: 56),
+                        _buildNeonBanner(),
+                        if (_error != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            _error!,
+                            style: const TextStyle(color: Colors.redAccent),
+                          ),
+                        ],
+                      ],
                     ),
-                  ],
+                  ),
+                  if (!tap)
+                    Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
+                  Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
                 ],
               ),
             ),
-            Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
-          ],
+          ),
         ),
       ),
     );
