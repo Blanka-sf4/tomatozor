@@ -369,6 +369,16 @@ class _ListenScreenState extends State<ListenScreen>
   // Vrai dès que le micro a capté un vrai signal (> -45 dB) depuis le start.
   bool _soundDetected = false;
 
+  // --- Silence ----------------------------------------------------------------
+  // Échantillons consécutifs sous le seuil de "son détecté" (−45 dB).
+  // 3 s après du son → "la musique s'est arrêtée", mémoire vidée, on
+  // continue d'écouter. 20 s sans jamais rien → micro coupé.
+  int _silentSamples = 0;
+  static const int _musicStoppedAfter = kSampleRate * 3;
+  static const int _nothingHeardAfter = kSampleRate * 20;
+  bool _musicStopped = false;
+  bool _nothingHeard = false;
+
   // --- Saturation ------------------------------------------------------------
   // On compte les échantillons en butée (|s| ≥ 32700) sur chaque fenêtre
   // d'estimation (0,5 s). Plus de 1 % = le micro sature : le son est
@@ -760,6 +770,9 @@ class _ListenScreenState extends State<ListenScreen>
     _samplesSinceEstimate = 0;
     _locked = false;
     _beatAnchor = null;
+    _silentSamples = 0;
+    _musicStopped = false;
+    _nothingHeard = false;
     _clipWrite = 0;
     _clipFilled = 0;
     _clippedInWindow = 0;
@@ -872,10 +885,37 @@ class _ListenScreenState extends State<ListenScreen>
       }
     }
 
+    // Silence : on compte, et on agit aux deux seuils.
+    if (db > -45) {
+      _silentSamples = 0;
+      if (_musicStopped) {
+        // La musique repart : on repart de zéro, proprement.
+        _musicStopped = false;
+        _detector.reset();
+        _history.clear();
+      }
+      _soundDetected = true;
+    } else {
+      _silentSamples += samples.length;
+      if (_soundDetected &&
+          !_musicStopped &&
+          !_locked &&
+          _silentSamples >= _musicStoppedAfter) {
+        _musicStopped = true;
+        _detector.reset();
+        _history.clear();
+        _lastResult = null;
+        _displayBpm = null;
+        _playSound('sounds/pfff.wav');
+      } else if (!_soundDetected && _silentSamples >= _nothingHeardAfter) {
+        _nothingHeard = true;
+        _stopMic();
+      }
+    }
+
     setState(() {
       _dbLevel = db;
       _level = _level * 0.7 + level * 0.3;
-      if (db > -45) _soundDetected = true;
       if (result != null) {
         _lastResult = result;
         _displayBpm = _median(_history);
@@ -1165,8 +1205,12 @@ class _ListenScreenState extends State<ListenScreen>
   String _currentFace() {
     if (_dinoFace != 'head') return _dinoFace;
     if (_mode == AppMode.listen && _isListening && !_locked) {
+      if (_musicStopped) return 'huh';
       if (!_soundDetected) return 'listen';
       if (_lastResult == null && _dbLevel < -30) return 'huh';
+    }
+    if (_mode == AppMode.listen && _nothingHeard && !_isListening) {
+      return 'huh';
     }
     return 'head';
   }
@@ -1796,6 +1840,12 @@ class _ListenScreenState extends State<ListenScreen>
         const SizedBox(height: 4),
         Text('Tape le dino pour recommencer', style: theme.textTheme.bodySmall),
       ];
+    } else if (!_isListening && _nothingHeard) {
+      lines = [
+        Text('Rien entendu, micro coupé', style: theme.textTheme.bodyLarge),
+        const SizedBox(height: 4),
+        Text('Tape le dino quand ça joue', style: theme.textTheme.bodySmall),
+      ];
     } else if (!_isListening) {
       lines = [
         Text(
@@ -1816,6 +1866,15 @@ class _ListenScreenState extends State<ListenScreen>
         const SizedBox(height: 4),
         Text(
           'Pas de calage tant que le son est écrasé',
+          style: theme.textTheme.bodySmall,
+        ),
+      ];
+    } else if (_musicStopped) {
+      lines = [
+        Text('La musique s\'est arrêtée', style: theme.textTheme.bodyLarge),
+        const SizedBox(height: 4),
+        Text(
+          'J\'écoute toujours… relance un son',
           style: theme.textTheme.bodySmall,
         ),
       ];
