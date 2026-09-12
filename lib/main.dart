@@ -14,6 +14,7 @@ import 'bpm_detector.dart';
 import 'dino.dart';
 import 'history.dart';
 import 'metronome.dart';
+import 'tutorial.dart';
 
 // Paramètres audio, partagés avec le détecteur.
 const int kSampleRate = 44100; // échantillons par seconde
@@ -545,10 +546,72 @@ class _ListenScreenState extends State<ListenScreen>
         ).build(),
       ).then((pool) => _squishPools[name] = pool);
     }
-    // Le chat t'accueille au lancement.
-    Future.delayed(const Duration(milliseconds: 600), () {
+    // Le chat t'accueille au lancement — sauf au tout premier, où c'est
+    // le tutoriel qui accueille (le chat miaulera après).
+    Future.delayed(const Duration(milliseconds: 600), () async {
+      if (!mounted) return;
+      if (!_store.tutorialSeen) {
+        await _showTutorial();
+        await _store.setTutorialSeen();
+      }
       if (mounted) _greet();
     });
+  }
+
+  /// Le tutoriel : 4 écrans, au premier lancement ou depuis Options.
+  Future<void> _showTutorial() {
+    const kawaii = kKawaiiBackground;
+    final pages = [
+      const TutorialPage(
+        image: 'assets/images/dino_head.png',
+        title: 'Tape le dino quand le son a pété',
+        body:
+            'Le dino écoute la musique au micro et trouve son tempo.\n'
+            'Laisse-le bosser 5 à 10 secondes, le point rose bat sur les temps.',
+        background: [Color(0xFF7B2C6B), Color(0xFFB03A8C), Color(0xFF3A0F3F)],
+        sound: 'sounds/meow.wav',
+      ),
+      const TutorialPage(
+        image: 'assets/images/dino_yell.png',
+        title: 'Il se cale, il fait la fête',
+        body:
+            'Une fois sûr de lui, il crie — un animal différent selon le tempo —\n'
+            'et garde 8 secondes de son dans HISTO, avec le BPM.\n'
+            'Rap ou trap ? OPTION → 60-120.',
+        background: kawaii,
+        sound: 'sounds/sneeze.wav',
+        titleColors: [Color(0xFFE6007E), Color(0xFF7B2CBF)],
+      ),
+      const TutorialPage(
+        image: 'assets/images/incog_normal.png',
+        title: '⚠ Mode de secours',
+        body:
+            'Trop de bruit, son pourri ? Le bouton rouge en bas.\n'
+            'Tape le rythme toi-même sur le dino : il crache des flammes\n'
+            'quand il a compris.',
+        background: kFireBackground,
+        sound: 'sounds/gloups.wav',
+        titleColors: kFire,
+      ),
+      const TutorialPage(
+        image: 'assets/images/chicken_normal.png',
+        title: '🐔 Métronome',
+        body:
+            'Le bouton bleu en bas. Règle le tempo, ou reprends-le dans HISTO.\n'
+            'Tape un animal : c\'est lui qui fait le clic.',
+        background: kMetroBackground,
+        sound: 'sounds/cluck.wav',
+      ),
+    ];
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => TutorialScreen(
+          pages: pages,
+          rainbow: kRainbow,
+          onSound: _playSound,
+        ),
+      ),
+    );
   }
 
   /// Joue un son d'ambiance (cri, squish, accueil…) si les sons sont
@@ -2404,6 +2467,14 @@ class _ListenScreenState extends State<ListenScreen>
                         _buildLatencyControl(setDialogState),
                         const Divider(height: 20),
                         _buildAmbianceControls(setDialogState),
+                        TextButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).pop();
+                            _showTutorial();
+                          },
+                          icon: const Icon(Icons.school_outlined, size: 18),
+                          label: const Text('Revoir le tutoriel'),
+                        ),
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),

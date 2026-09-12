@@ -55,6 +55,9 @@ class HistoryStore {
   bool vibrationOn = true;
   bool metroVibrate = false;
 
+  /// Le tutoriel a-t-il été vu ?
+  bool tutorialSeen = false;
+
   Directory? _dir;
 
   Future<Directory> _directory() async {
@@ -95,6 +98,7 @@ class HistoryStore {
       soundsOn = (j['soundsOn'] as bool?) ?? true;
       vibrationOn = (j['vibrationOn'] as bool?) ?? true;
       metroVibrate = (j['metroVibrate'] as bool?) ?? false;
+      tutorialSeen = (j['tutorialSeen'] as bool?) ?? false;
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -116,6 +120,7 @@ class HistoryStore {
         'soundsOn': soundsOn,
         'vibrationOn': vibrationOn,
         'metroVibrate': metroVibrate,
+        'tutorialSeen': tutorialSeen,
       }),
     );
   }
@@ -157,6 +162,11 @@ class HistoryStore {
 
   Future<void> setMetroBeatsPerBar(int n) async {
     metroBeatsPerBar = n;
+    await _save();
+  }
+
+  Future<void> setTutorialSeen() async {
+    tutorialSeen = true;
     await _save();
   }
 
