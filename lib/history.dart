@@ -45,6 +45,13 @@ class HistoryStore {
   double metroBpm = 120;
   String metroSound = 'wood';
 
+  /// Ambiance : lumières (néons, flashs), sons (cris, squish…), vibrations,
+  /// et vibration sur chaque temps du métronome.
+  bool lightsOn = true;
+  bool soundsOn = true;
+  bool vibrationOn = true;
+  bool metroVibrate = false;
+
   Directory? _dir;
 
   Future<Directory> _directory() async {
@@ -52,7 +59,8 @@ class HistoryStore {
     // Dossier "externe" de l'appli (Android/data/<pkg>/files) : toujours
     // privé et supprimé avec l'appli, mais lisible par adb — pratique pour
     // récupérer les extraits et calibrer le détecteur sur de vrais sons.
-    final base = await getExternalStorageDirectory() ??
+    final base =
+        await getExternalStorageDirectory() ??
         await getApplicationDocumentsDirectory();
     _dir = Directory('${base.path}/history');
     if (!await _dir!.exists()) await _dir!.create(recursive: true);
@@ -79,6 +87,10 @@ class HistoryStore {
       latencyMs = (j['latencyMs'] as num?)?.toInt() ?? defaultLatencyMs;
       metroBpm = (j['metroBpm'] as num?)?.toDouble() ?? 120;
       metroSound = (j['metroSound'] as String?) ?? 'wood';
+      lightsOn = (j['lightsOn'] as bool?) ?? true;
+      soundsOn = (j['soundsOn'] as bool?) ?? true;
+      vibrationOn = (j['vibrationOn'] as bool?) ?? true;
+      metroVibrate = (j['metroVibrate'] as bool?) ?? false;
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -95,6 +107,10 @@ class HistoryStore {
         'latencyMs': latencyMs,
         'metroBpm': metroBpm,
         'metroSound': metroSound,
+        'lightsOn': lightsOn,
+        'soundsOn': soundsOn,
+        'vibrationOn': vibrationOn,
+        'metroVibrate': metroVibrate,
       }),
     );
   }
@@ -118,6 +134,19 @@ class HistoryStore {
     entries.remove(entry);
     final f = File(entry.file);
     if (await f.exists()) await f.delete();
+    await _save();
+  }
+
+  Future<void> setAmbiance({
+    bool? lights,
+    bool? sounds,
+    bool? vibration,
+    bool? metroVibrate,
+  }) async {
+    if (lights != null) lightsOn = lights;
+    if (sounds != null) soundsOn = sounds;
+    if (vibration != null) vibrationOn = vibration;
+    if (metroVibrate != null) this.metroVibrate = metroVibrate;
     await _save();
   }
 

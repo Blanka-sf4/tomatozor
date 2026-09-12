@@ -540,18 +540,36 @@ class _ListenScreenState extends State<ListenScreen>
     });
   }
 
+  /// Joue un son d'ambiance (cri, squish, accueil…) si les sons sont
+  /// activés. Les clics du métronome et la réécoute d'HISTO ne passent pas
+  /// par ici : ce sont des fonctions, pas de l'ambiance.
+  void _playSound(String asset) {
+    if (!_store.soundsOn) return;
+    unawaited(_player.play(AssetSource(asset)));
+  }
+
+  Future<void> _vibrate({int? duration, List<int>? pattern}) async {
+    if (!_store.vibrationOn) return;
+    if (!await Vibration.hasVibrator()) return;
+    if (pattern != null) {
+      await Vibration.vibrate(pattern: pattern);
+    } else {
+      await Vibration.vibrate(duration: duration ?? 50);
+    }
+  }
+
   /// La mascotte du mode courant te salue : le chat miaule, l'incognito
   /// fait gloups et se planque sous son chapeau.
   void _greet() {
     if (_mode == AppMode.metro) {
       _setMascot('chicken_cluck', const Duration(milliseconds: 1100));
-      unawaited(_player.play(AssetSource('sounds/cluck.wav')));
+      _playSound('sounds/cluck.wav');
     } else if (_mode == AppMode.tap) {
       _setMascot('incog_hide', const Duration(milliseconds: 1300));
-      unawaited(_player.play(AssetSource('sounds/gloups.wav')));
+      _playSound('sounds/gloups.wav');
     } else {
       _setMascot('cat_meow', const Duration(milliseconds: 800));
-      unawaited(_player.play(AssetSource('sounds/meow.wav')));
+      _playSound('sounds/meow.wav');
     }
   }
 
@@ -667,6 +685,11 @@ class _ListenScreenState extends State<ListenScreen>
     // L'horloge du beat suit le métronome : tout ce qui danse suit.
     _beatAnchor = DateTime.now();
     _beatPeriodMs = 60000 / _metro.bpm;
+    // Vibration sur chaque temps (option) : plus forte sur le temps fort.
+    if (_store.metroVibrate && _store.vibrationOn) {
+      final accent = _metro.beatsPerBar > 0 && beat % _metro.beatsPerBar == 0;
+      Vibration.vibrate(duration: accent ? 60 : 30);
+    }
   }
 
   void _metroToggle() {
@@ -887,7 +910,7 @@ class _ListenScreenState extends State<ListenScreen>
       final t = DateTime.now();
       if (t.difference(_lastYark).inSeconds >= 4) {
         _lastYark = t;
-        unawaited(_player.play(AssetSource('sounds/yark.wav')));
+        _playSound('sounds/yark.wav');
       }
     } else if (!_saturated && now) {
       _dinoFace = 'head';
@@ -994,7 +1017,7 @@ class _ListenScreenState extends State<ListenScreen>
           Timer(_tapLockHold, () {
             if (!mounted || !_locked) return;
             setState(() {});
-            Vibration.vibrate(duration: 50);
+            _vibrate(duration: 50);
           });
           _celebrate(kPig);
           _store.setLastTapBpm(bpm);
@@ -1120,8 +1143,8 @@ class _ListenScreenState extends State<ListenScreen>
   /// Easter egg : appui long sur le dino → langue tirée + pet.
   void _easterEgg() {
     _setTemporaryFace('tongue', const Duration(milliseconds: 1400));
-    unawaited(_player.play(AssetSource('sounds/fart.wav')));
-    Vibration.vibrate(duration: 60);
+    _playSound('sounds/fart.wav');
+    _vibrate(duration: 60);
   }
 
   /// La tête déduite de la situation, quand aucune n'est imposée.
@@ -1143,12 +1166,10 @@ class _ListenScreenState extends State<ListenScreen>
     // Il hurle de joie pendant toute la durée du cri.
     _setTemporaryFace('yell', Duration(milliseconds: animal.ms));
     _flash.forward(from: 0);
-    unawaited(_player.play(AssetSource(animal.sound)));
+    _playSound(animal.sound);
     // Deux secousses. Le paquet `vibration` pilote le moteur directement,
     // indépendamment du réglage "vibration au toucher" du téléphone.
-    if (await Vibration.hasVibrator()) {
-      await Vibration.vibrate(pattern: [0, 180, 120, 180]);
-    }
+    await _vibrate(pattern: [0, 180, 120, 180]);
   }
 
   // --- Interface ---------------------------------------------------------------
@@ -1345,12 +1366,14 @@ class _ListenScreenState extends State<ListenScreen>
             child: GestureDetector(
               onTapDown: (_) {
                 _mascotSquish.value = 1;
-                _squishPools[switch (_mode) {
-                      AppMode.listen => 'cat',
-                      AppMode.tap => 'incog',
-                      AppMode.metro => 'chicken',
-                    }]
-                    ?.start();
+                if (_store.soundsOn) {
+                  _squishPools[switch (_mode) {
+                        AppMode.listen => 'cat',
+                        AppMode.tap => 'incog',
+                        AppMode.metro => 'chicken',
+                      }]
+                      ?.start();
+                }
                 if (_mode == AppMode.metro) _selectMetroSound('chicken');
               },
               child: ValueListenableBuilder<double>(
@@ -1462,7 +1485,7 @@ class _ListenScreenState extends State<ListenScreen>
       animation: _flash,
       builder: (context, _) {
         final t = _flash.value;
-        final flashing = _flash.isAnimating;
+        final flashing = _flash.isAnimating && _store.lightsOn;
         final blink = flashing ? (sin(t * 2 * pi * 9) > 0 ? 1.0 : 0.3) : 1.0;
         return Opacity(
           opacity: blink,
@@ -2082,6 +2105,65 @@ class _ListenScreenState extends State<ListenScreen>
     return '${two(d.day)}/${two(d.month)}/${d.year}  ${two(d.hour)}:${two(d.minute)}';
   }
 
+  /// Section Ambiance des options : lumières, sons, vibrations, et la
+  /// vibration sur chaque temps du métronome.
+  Widget _buildAmbianceControls(void Function(void Function()) setDialogState) {
+    Widget row(
+      String title,
+      String subtitle,
+      IconData icon,
+      bool value,
+      void Function(bool) onChanged,
+    ) {
+      return SwitchListTile(
+        dense: true,
+        secondary: Icon(icon),
+        title: Text(title),
+        subtitle: Text(subtitle, style: const TextStyle(fontSize: 11)),
+        value: value,
+        onChanged: (v) {
+          onChanged(v);
+          setDialogState(() {});
+          if (mounted) setState(() {});
+        },
+      );
+    }
+
+    return Column(
+      children: [
+        const Text('Ambiance', style: TextStyle(fontWeight: FontWeight.bold)),
+        row(
+          'Lumières',
+          'néons, flashs',
+          Icons.flash_on,
+          _store.lightsOn,
+          (v) => _store.setAmbiance(lights: v),
+        ),
+        row(
+          'Sons',
+          'cris, squish, accueil (pas les clics du métronome)',
+          Icons.music_note,
+          _store.soundsOn,
+          (v) => _store.setAmbiance(sounds: v),
+        ),
+        row(
+          'Vibrations',
+          'calage, déblocage, easter eggs',
+          Icons.vibration,
+          _store.vibrationOn,
+          (v) => _store.setAmbiance(vibration: v),
+        ),
+        row(
+          'Métronome : vibrer sur chaque temps',
+          'pour bosser en silence, téléphone dans la poche',
+          Icons.watch_later_outlined,
+          _store.metroVibrate,
+          (v) => _store.setAmbiance(metroVibrate: v),
+        ),
+      ],
+    );
+  }
+
   /// Réglage du décalage du point de beat, avec un petit point témoin qui
   /// bat en même temps que le grand.
   Widget _buildLatencyControl(void Function(void Function()) setDialogState) {
@@ -2247,6 +2329,8 @@ class _ListenScreenState extends State<ListenScreen>
                           ),
                         const Divider(height: 20),
                         _buildLatencyControl(setDialogState),
+                        const Divider(height: 20),
+                        _buildAmbianceControls(setDialogState),
                         const SizedBox(height: 4),
                         TextButton(
                           onPressed: () => Navigator.of(context).pop(),
@@ -2490,7 +2574,7 @@ class _ListenScreenState extends State<ListenScreen>
     return GestureDetector(
       onTapDown: (_) {
         squish.value = 1;
-        _squishPools[name]?.start();
+        if (_store.soundsOn) _squishPools[name]?.start();
         _selectMetroSound(name);
       },
       child: ValueListenableBuilder<double>(
@@ -2723,9 +2807,26 @@ class _ListenScreenState extends State<ListenScreen>
                       ),
                     ),
                   Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
+                  // Ambiance réduite : petites icônes barrées, discrètes.
+                  if (!_store.soundsOn || !_store.lightsOn)
+                    Positioned(
+                      right: 10,
+                      top: 6,
+                      child: Opacity(
+                        opacity: 0.6,
+                        child: Row(
+                          children: [
+                            if (!_store.lightsOn)
+                              const Icon(Icons.flash_off, size: 18),
+                            if (!_store.soundsOn)
+                              const Icon(Icons.music_off, size: 18),
+                          ],
+                        ),
+                      ),
+                    ),
                   // La fête : néons de toutes les couleurs tant que ça danse
                   // (calé, beat en cours), dans les deux modes.
-                  if (_locked && _beatAnchor != null)
+                  if (_locked && _beatAnchor != null && _store.lightsOn)
                     Positioned.fill(
                       child: IgnorePointer(
                         child: ValueListenableBuilder<double>(
