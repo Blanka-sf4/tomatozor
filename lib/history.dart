@@ -45,6 +45,9 @@ class HistoryStore {
   double metroBpm = 120;
   String metroSound = 'wood';
 
+  /// Mesure du métronome : temps par mesure (0 = pas de temps fort).
+  int metroBeatsPerBar = 4;
+
   /// Ambiance : lumières (néons, flashs), sons (cris, squish…), vibrations,
   /// et vibration sur chaque temps du métronome.
   bool lightsOn = true;
@@ -87,6 +90,7 @@ class HistoryStore {
       latencyMs = (j['latencyMs'] as num?)?.toInt() ?? defaultLatencyMs;
       metroBpm = (j['metroBpm'] as num?)?.toDouble() ?? 120;
       metroSound = (j['metroSound'] as String?) ?? 'wood';
+      metroBeatsPerBar = (j['metroBeatsPerBar'] as num?)?.toInt() ?? 4;
       lightsOn = (j['lightsOn'] as bool?) ?? true;
       soundsOn = (j['soundsOn'] as bool?) ?? true;
       vibrationOn = (j['vibrationOn'] as bool?) ?? true;
@@ -107,6 +111,7 @@ class HistoryStore {
         'latencyMs': latencyMs,
         'metroBpm': metroBpm,
         'metroSound': metroSound,
+        'metroBeatsPerBar': metroBeatsPerBar,
         'lightsOn': lightsOn,
         'soundsOn': soundsOn,
         'vibrationOn': vibrationOn,
@@ -147,6 +152,11 @@ class HistoryStore {
     if (sounds != null) soundsOn = sounds;
     if (vibration != null) vibrationOn = vibration;
     if (metroVibrate != null) this.metroVibrate = metroVibrate;
+    await _save();
+  }
+
+  Future<void> setMetroBeatsPerBar(int n) async {
+    metroBeatsPerBar = n;
     await _save();
   }
 

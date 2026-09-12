@@ -513,6 +513,7 @@ class _ListenScreenState extends State<ListenScreen>
     _store.load().then((_) {
       _metro.setBpm(_store.metroBpm);
       _metro.setSound(_store.metroSound);
+      _metro.beatsPerBar = _store.metroBeatsPerBar;
       if (mounted) setState(() {});
     });
     // Un bruit d'écrasement par personnage.
@@ -620,6 +621,7 @@ class _ListenScreenState extends State<ListenScreen>
     _faceTimer?.cancel();
     _longPressTimer?.cancel();
     _mascotSquish.dispose();
+    _metroBeatInBar.dispose();
     for (final n in _paradeSquish.values) {
       n.dispose();
     }
@@ -681,10 +683,15 @@ class _ListenScreenState extends State<ListenScreen>
 
   // --- Métronome ----------------------------------------------------------------
 
+  final ValueNotifier<int> _metroBeatInBar = ValueNotifier(-1);
+
   void _onMetroBeat(int beat) {
     // L'horloge du beat suit le métronome : tout ce qui danse suit.
     _beatAnchor = DateTime.now();
     _beatPeriodMs = 60000 / _metro.bpm;
+    _metroBeatInBar.value = _metro.beatsPerBar > 0
+        ? beat % _metro.beatsPerBar
+        : -1;
     // Vibration sur chaque temps (option) : plus forte sur le temps fort.
     if (_store.metroVibrate && _store.vibrationOn) {
       final accent = _metro.beatsPerBar > 0 && beat % _metro.beatsPerBar == 0;
@@ -692,9 +699,16 @@ class _ListenScreenState extends State<ListenScreen>
     }
   }
 
+  void _metroSetBeatsPerBar(int n) {
+    _metro.beatsPerBar = n;
+    _store.setMetroBeatsPerBar(n);
+    setState(() {});
+  }
+
   void _metroToggle() {
     if (_metro.running) {
       _metro.stop();
+      _metroBeatInBar.value = -1;
       setState(() {
         _locked = false;
         _beatAnchor = null;
@@ -2504,6 +2518,56 @@ class _ListenScreenState extends State<ListenScreen>
               onChanged: (v) => _metroSetBpm(v.roundToDouble()),
             ),
           ),
+          // Mesure : temps fort tous les n temps, et les points qui
+          // s'allument au fil de la mesure.
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              for (final (label, n) in [
+                ('4/4', 4),
+                ('3/4', 3),
+                ('6/8', 6),
+                ('2/4', 2),
+                ('—', 0),
+              ])
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: ChoiceChip(
+                    label: Text(label, style: const TextStyle(fontSize: 11)),
+                    selected: _metro.beatsPerBar == n,
+                    selectedColor: accent.withValues(alpha: 0.5),
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    onSelected: (_) => _metroSetBeatsPerBar(n),
+                  ),
+                ),
+            ],
+          ),
+          if (_metro.beatsPerBar > 0)
+            ValueListenableBuilder<int>(
+              valueListenable: _metroBeatInBar,
+              builder: (context, current, _) => Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  for (var i = 0; i < _metro.beatsPerBar; i++)
+                    Container(
+                      width: i == 0 ? 12 : 9,
+                      height: i == 0 ? 12 : 9,
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: i == current ? accent : Colors.white24,
+                        boxShadow: i == current
+                            ? [BoxShadow(color: accent, blurRadius: 8)]
+                            : null,
+                      ),
+                    ),
+                ],
+              ),
+            ),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
