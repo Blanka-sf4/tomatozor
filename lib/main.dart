@@ -2344,85 +2344,89 @@ class _ListenScreenState extends State<ListenScreen>
                 child: StatefulBuilder(
                   builder: (context, setDialogState) {
                     final entries = _store.entries;
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        RainbowText(
-                          pick ? 'Reprendre un tempo' : 'Historique',
-                          style: Theme.of(context).textTheme.titleLarge!
-                              .copyWith(
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 2,
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-                        if (entries.isEmpty)
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: Text('Rien pour l\'instant — cale un son !'),
-                          ),
-                        for (final e in entries)
-                          ListTile(
-                            dense: true,
-                            onTap: pick
-                                ? () {
-                                    _metroSetBpm(e.bpm);
-                                    Navigator.of(context).pop();
-                                  }
-                                : null,
-                            leading: IconButton(
-                              iconSize: 32,
-                              color: kGreenSign,
-                              icon: Icon(
-                                _playingFile == e.file
-                                    ? Icons.stop_circle
-                                    : Icons.play_circle,
-                              ),
-                              onPressed: () async {
-                                await _togglePlay(e);
-                                setDialogState(() {});
-                              },
-                            ),
-                            title: Text(
-                              '${animalFor(e.bpm).emoji}  ${fmtBpm(e.bpm)} BPM',
-                              style: const TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                                fontFeatures: [FontFeature.tabularFigures()],
-                              ),
-                            ),
-                            subtitle: Text(_fmtDate(e.at)),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  icon: const Icon(Icons.share),
-                                  color: kGreenSign,
-                                  tooltip: 'Partager le son et son BPM',
-                                  onPressed: () => _shareEntry(e),
+                    return SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RainbowText(
+                            pick ? 'Reprendre un tempo' : 'Historique',
+                            style: Theme.of(context).textTheme.titleLarge!
+                                .copyWith(
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 2,
                                 ),
-                                IconButton(
-                                  icon: const Icon(Icons.delete_outline),
-                                  color: Colors.redAccent,
-                                  onPressed: () async {
-                                    if (_playingFile == e.file) {
-                                      await _clipPlayer.stop();
-                                      _playingFile = null;
+                          ),
+                          const SizedBox(height: 8),
+                          if (entries.isEmpty)
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Text(
+                                'Rien pour l\'instant — cale un son !',
+                              ),
+                            ),
+                          for (final e in entries)
+                            ListTile(
+                              dense: true,
+                              onTap: pick
+                                  ? () {
+                                      _metroSetBpm(e.bpm);
+                                      Navigator.of(context).pop();
                                     }
-                                    await _store.remove(e);
-                                    setDialogState(() {});
-                                    if (mounted) setState(() {});
-                                  },
+                                  : null,
+                              leading: IconButton(
+                                iconSize: 32,
+                                color: kGreenSign,
+                                icon: Icon(
+                                  _playingFile == e.file
+                                      ? Icons.stop_circle
+                                      : Icons.play_circle,
                                 ),
-                              ],
+                                onPressed: () async {
+                                  await _togglePlay(e);
+                                  setDialogState(() {});
+                                },
+                              ),
+                              title: Text(
+                                '${animalFor(e.bpm).emoji}  ${fmtBpm(e.bpm)} BPM',
+                                style: const TextStyle(
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.bold,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                              subtitle: Text(_fmtDate(e.at)),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.share),
+                                    color: kGreenSign,
+                                    tooltip: 'Partager le son et son BPM',
+                                    onPressed: () => _shareEntry(e),
+                                  ),
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    color: Colors.redAccent,
+                                    onPressed: () async {
+                                      if (_playingFile == e.file) {
+                                        await _clipPlayer.stop();
+                                        _playingFile = null;
+                                      }
+                                      await _store.remove(e);
+                                      setDialogState(() {});
+                                      if (mounted) setState(() {});
+                                    },
+                                  ),
+                                ],
+                              ),
                             ),
+                          const SizedBox(height: 4),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('OK'),
                           ),
-                        const SizedBox(height: 4),
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('OK'),
-                        ),
-                      ],
+                        ],
+                      ),
                     );
                   },
                 ),
@@ -2645,58 +2649,62 @@ class _ListenScreenState extends State<ListenScreen>
                 ),
                 child: StatefulBuilder(
                   builder: (context, setDialogState) {
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        RainbowText(
-                          'Plage de tempo',
-                          style: Theme.of(context).textTheme.titleLarge!
-                              .copyWith(
-                                fontWeight: FontWeight.w900,
-                                letterSpacing: 2,
-                              ),
-                        ),
-                        const SizedBox(height: 8),
-                        for (var i = 0; i < _ranges.length; i++)
-                          CheckboxListTile(
-                            value: i == _rangeIndex,
-                            activeColor: kRainbow[i % kRainbow.length],
-                            title: Text(
-                              _ranges[i].label,
-                              style: TextStyle(
-                                fontWeight: i == _rangeIndex
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                            subtitle: i == 0
-                                ? const Text('Détection large, a priori 90-180')
-                                : null,
-                            dense: true,
-                            onChanged: (_) {
-                              _selectRange(i);
-                              _rangeKonami(i);
-                              setDialogState(() {});
-                            },
+                    return SingleChildScrollView(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          RainbowText(
+                            'Plage de tempo',
+                            style: Theme.of(context).textTheme.titleLarge!
+                                .copyWith(
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: 2,
+                                ),
                           ),
-                        const Divider(height: 20),
-                        _buildLatencyControl(setDialogState),
-                        const Divider(height: 20),
-                        _buildAmbianceControls(setDialogState),
-                        TextButton.icon(
-                          onPressed: () {
-                            Navigator.of(context).pop();
-                            _showTutorial();
-                          },
-                          icon: const Icon(Icons.school_outlined, size: 18),
-                          label: const Text('Revoir le tutoriel'),
-                        ),
-                        const SizedBox(height: 4),
-                        TextButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          child: const Text('OK'),
-                        ),
-                      ],
+                          const SizedBox(height: 8),
+                          for (var i = 0; i < _ranges.length; i++)
+                            CheckboxListTile(
+                              value: i == _rangeIndex,
+                              activeColor: kRainbow[i % kRainbow.length],
+                              title: Text(
+                                _ranges[i].label,
+                                style: TextStyle(
+                                  fontWeight: i == _rangeIndex
+                                      ? FontWeight.bold
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              subtitle: i == 0
+                                  ? const Text(
+                                      'Détection large, a priori 90-180',
+                                    )
+                                  : null,
+                              dense: true,
+                              onChanged: (_) {
+                                _selectRange(i);
+                                _rangeKonami(i);
+                                setDialogState(() {});
+                              },
+                            ),
+                          const Divider(height: 20),
+                          _buildLatencyControl(setDialogState),
+                          const Divider(height: 20),
+                          _buildAmbianceControls(setDialogState),
+                          TextButton.icon(
+                            onPressed: () {
+                              Navigator.of(context).pop();
+                              _showTutorial();
+                            },
+                            icon: const Icon(Icons.school_outlined, size: 18),
+                            label: const Text('Revoir le tutoriel'),
+                          ),
+                          const SizedBox(height: 4),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: const Text('OK'),
+                          ),
+                        ],
+                      ),
                     );
                   },
                 ),
@@ -3079,35 +3087,45 @@ class _ListenScreenState extends State<ListenScreen>
   /// autour à des positions fixes (fractions de la zone), chacun penché
   /// à sa façon pour casser l'alignement.
   Widget _buildMetroScene(BuildContext context) {
-    // (nom, x, y, inclinaison en radians, tranche)
-    const spots = [
-      ('cat', 0.03, 0.02, -0.15, null),
-      ('unicorn', 0.84, 0.00, 0.2, 2),
-      ('goat', 0.00, 0.40, 0.12, 3),
-      ('dino', 0.86, 0.36, -0.1, null),
-      ('pig', 0.06, 0.80, -0.2, 1),
-      ('incog', 0.44, 0.84, 0.08, null),
-      ('psyllo', 0.80, 0.76, 0.18, null),
-    ];
-    return LayoutBuilder(
-      builder: (context, c) {
-        const item = 60.0;
-        return Stack(
-          clipBehavior: Clip.none,
+    // Une rangée au-dessus du panneau, une en dessous : impossible de
+    // chevaucher le métronome. Décalages verticaux et inclinaisons variés
+    // pour casser l'alignement.
+    Widget spot(String name, int index, double dy, double tilt, {int? tier}) {
+      return Transform.translate(
+        offset: Offset(0, dy),
+        child: Transform.rotate(
+          angle: tilt,
+          child: _buildParadeItem(name, index, tier: tier),
+        ),
+      );
+    }
+
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Center(child: _buildMetroPanel(context)),
-            for (var i = 0; i < spots.length; i++)
-              Positioned(
-                left: spots[i].$2 * (c.maxWidth - item),
-                top: spots[i].$3 * (c.maxHeight - item),
-                child: Transform.rotate(
-                  angle: spots[i].$4,
-                  child: _buildParadeItem(spots[i].$1, i, tier: spots[i].$5),
-                ),
-              ),
+            spot('cat', 0, 8, -0.15),
+            spot('goat', 2, -10, 0.12, tier: 3),
+            spot('unicorn', 1, 4, 0.2, tier: 2),
+            spot('dino', 3, -6, -0.1),
           ],
-        );
-      },
+        ),
+        const SizedBox(height: 14),
+        _buildMetroPanel(context),
+        const SizedBox(height: 14),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            spot('pig', 4, 6, -0.2, tier: 1),
+            spot('incog', 5, -8, 0.08),
+            spot('psyllo', 6, 10, 0.18),
+          ],
+        ),
+      ],
     );
   }
 

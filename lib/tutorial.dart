@@ -108,30 +108,44 @@ class _TutorialScreenState extends State<TutorialScreen> {
                         children: [
                           Image.asset(p.image, height: 190),
                           const SizedBox(height: 28),
-                          ShaderMask(
-                            blendMode: BlendMode.srcIn,
-                            shaderCallback: (rect) => LinearGradient(
-                              colors: p.titleColors ?? widget.rainbow,
-                            ).createShader(rect),
-                            child: Text(
-                              p.title,
-                              textAlign: TextAlign.center,
-                              style: const TextStyle(
-                                fontFamily: 'RubikSprayPaint',
-                                fontSize: 30,
-                                height: 1.1,
-                                color: Colors.white,
-                              ),
+                          // Cartouche sombre : lisible sur les fonds clairs
+                          // (le kawaii) comme sur les sombres.
+                          Container(
+                            padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withValues(alpha: 0.55),
+                              borderRadius: BorderRadius.circular(18),
                             ),
-                          ),
-                          const SizedBox(height: 18),
-                          Text(
-                            p.body,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              height: 1.4,
-                              color: Colors.white,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ShaderMask(
+                                  blendMode: BlendMode.srcIn,
+                                  shaderCallback: (rect) => LinearGradient(
+                                    colors: p.titleColors ?? widget.rainbow,
+                                  ).createShader(rect),
+                                  child: Text(
+                                    p.title,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontFamily: 'RubikSprayPaint',
+                                      fontSize: 30,
+                                      height: 1.1,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 18),
+                                Text(
+                                  p.body,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    height: 1.4,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ],
