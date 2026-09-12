@@ -3,6 +3,10 @@
 Les APK sont publiés sur GitHub :
 https://github.com/Blanka-sf4/tomatozor/releases
 
+- `TOMATOZOR-1.2.0.apk` — 12 septembre 2026. Détection par flux spectral
+  (multi-bande, règle du backbeat, figures pointées), réglages d'ambiance,
+  mesure du métronome, détection du silence, tutoriel, easter eggs,
+  taps du mode secours sans délai.
 - `TOMATOZOR-1.1.0.apk` — 11 septembre 2026, signé avec la clé TOMATOZOR.
   Mode micro, mode de secours (tap), mode métronome, historique avec extraits
   audio et partage, personnages vivants, cris par tranche de tempo.
