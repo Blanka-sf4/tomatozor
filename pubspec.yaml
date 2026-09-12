@@ -41,6 +41,7 @@ dependencies:
   path_provider: ^2.1.6
   share_plus: ^13.3.0
   fftea: ^1.5.0+1
+  sensors_plus: ^7.1.0
 
 dev_dependencies:
   flutter_test:
@@ -75,6 +76,10 @@ flutter:
     - assets/sounds/meow.wav
     - assets/sounds/gloups.wav
     - assets/sounds/pfff.wav
+    - assets/sounds/purr.wav
+    - assets/sounds/startle.wav
+    - assets/sounds/splotch.wav
+    - assets/sounds/giggle.wav
     - assets/sounds/click.wav
     - assets/sounds/click_hi.wav
     - assets/sounds/click_cat.wav

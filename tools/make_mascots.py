@@ -84,13 +84,22 @@ INK = (90, 90, 100)
 
 
 def draw_incog(d, frame="normal"):
-    paper_top = {"normal": 262, "peek": 335, "hide": 228}[frame]
+    paper_top = {"normal": 262, "peek": 335, "hide": 228, "mustache": 372}[frame]
     hat_dy = 48 if frame == "hide" else 0
     # Tête (cachée en partie par le journal)
     d.ellipse(box(256, 245, 118, 128), fill=SKIN, outline=BLACK, width=OUT)
-    # Nez et bouche (visibles seulement en "peek")
+    # Nez et bouche (visibles seulement en "peek" / "mustache")
     d.polygon([p(256, 255), p(272, 292), p(248, 292)], fill=(230, 180, 150), outline=BLACK, width=3 * SS)
-    d.line([p(226, 312), p(286, 312)], fill=BLACK, width=5 * SS)
+    if frame == "mustache":
+        # Grosse moustache en guidon, sourire gêné, joues rouges
+        for side in (-1, 1):
+            d.chord(box(256 + side * 48, 305, 52, 18), start=180, end=360, fill=(50, 30, 20))
+            d.ellipse(box(256 + side * 92, 300, 14, 14), fill=(50, 30, 20))
+        d.arc(box(256, 335, 30, 14), start=10, end=170, fill=BLACK, width=5 * SS)
+        d.ellipse(box(170, 325, 22, 14), fill=(255, 150, 150))
+        d.ellipse(box(342, 325, 22, 14), fill=(255, 150, 150))
+    else:
+        d.line([p(226, 312), p(286, 312)], fill=BLACK, width=5 * SS)
     # Lunettes noires
     for cx in (203, 309):
         d.rounded_rectangle(box(cx, 220, 46, 28), radius=14 * SS, fill=BLACK)
@@ -117,7 +126,7 @@ def draw_incog(d, frame="normal"):
 
 for name, fn, frames in (
     ("cat", draw_cat, ("normal", "blink", "ear", "meow")),
-    ("incog", draw_incog, ("normal", "peek", "hide")),
+    ("incog", draw_incog, ("normal", "peek", "hide", "mustache")),
 ):
     for frame in frames:
         im = Image.new("RGBA", (W, W), (0, 0, 0, 0))

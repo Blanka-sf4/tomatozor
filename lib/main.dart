@@ -6,6 +6,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:record/record.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
@@ -122,6 +123,10 @@ const kRanges = [
   TempoRange('150-300', 150, 300),
   TempoRange('225-450', 225, 450),
 ];
+
+/// Le preset caché, débloqué par le Konami des plages (Auto, 60-120, Auto,
+/// 60-120). Le détecteur plafonne en pratique vers 15-5000 BPM.
+const kCrazyRange = TempoRange('1-9999 🍄', 1, 9999);
 
 /// Une flamme crachée : position de départ, direction, instant de naissance.
 class _Flame {
@@ -420,6 +425,28 @@ class _ListenScreenState extends State<ListenScreen>
   // Écrasement de chaque personnage de la parade, par index.
   final Map<int, ValueNotifier<double>> _paradeSquish = {};
 
+  // --- Easter eggs -----------------------------------------------------------
+  StreamSubscription<AccelerometerEvent>? _accel;
+  DateTime _lastShake = DateTime.fromMillisecondsSinceEpoch(0);
+  Timer? _panicTimer;
+  // Mode nuit : après 2 min sans rien, tout le monde dort.
+  DateTime _lastInteraction = DateTime.now();
+  bool _asleep = false;
+  // Ronron du chat (appui long) : lecteur en boucle + vibration continue.
+  final AudioPlayer _purrPlayer = AudioPlayer();
+  Timer? _mascotHoldTimer;
+  bool _purring = false;
+  // L'œuf du poulet : position 0 → 1 (haut → bas), null = pas d'œuf.
+  final ValueNotifier<double?> _egg = ValueNotifier(null);
+  bool _eggBroken = false;
+  // Délire de Psyllo : fin en secondes-ticker, null = inactif.
+  double? _trippyUntil;
+  // Le 420 : taps rapides sur le chiffre.
+  final List<DateTime> _digitTaps = [];
+  bool _show420 = false;
+  // Konami des plages : les 4 derniers presets choisis.
+  final List<int> _rangeSequence = [];
+
   // Clignement des yeux : instants du prochain et de la fin du courant.
   final ValueNotifier<bool> _blink = ValueNotifier(false);
   double _nextBlinkAt = 2.0;
@@ -527,6 +554,18 @@ class _ListenScreenState extends State<ListenScreen>
       _metro.beatsPerBar = _store.metroBeatsPerBar;
       if (mounted) setState(() {});
     });
+    // Secousse : magnitude de l'accélération bien au-dessus de la gravité.
+    _accel = accelerometerEventStream().listen((e) {
+      final g = sqrt(e.x * e.x + e.y * e.y + e.z * e.z);
+      if (g > 24 && DateTime.now().difference(_lastShake).inSeconds >= 3) {
+        _lastShake = DateTime.now();
+        _panic();
+      }
+    });
+    _purrPlayer.setReleaseMode(ReleaseMode.loop);
+    _purrPlayer.setAudioContext(
+      AudioContextConfig(focus: AudioContextConfigFocus.mixWithOthers).build(),
+    );
     // Un bruit d'écrasement par personnage.
     for (final name in [
       'cat',
@@ -557,6 +596,116 @@ class _ListenScreenState extends State<ListenScreen>
       if (mounted) _greet();
     });
   }
+
+  // --- Easter eggs ---------------------------------------------------------------
+
+  /// Secousse : tout le monde panique 2 s — écrasements en rafale et
+  /// bruits en cascade.
+  void _panic() {
+    _wake();
+    _panicTimer?.cancel();
+    var n = 0;
+    const names = [
+      'cat',
+      'incog',
+      'chicken',
+      'dino',
+      'goat',
+      'pig',
+      'unicorn',
+      'psyllo',
+    ];
+    _panicTimer = Timer.periodic(const Duration(milliseconds: 130), (timer) {
+      _mascotSquish.value = 1;
+      _dinoBounce.value = 1;
+      for (final sq in _paradeSquish.values) {
+        if (_rng.nextBool()) sq.value = 1;
+      }
+      if (_store.soundsOn) {
+        _squishPools[names[_rng.nextInt(names.length)]]?.start();
+      }
+      if (++n >= 15) timer.cancel();
+    });
+    _vibrate(pattern: [0, 60, 40, 60, 40, 60]);
+  }
+
+  /// Réveil du mode nuit (n'importe quel tap).
+  void _wake() {
+    _lastInteraction = DateTime.now();
+    if (!_asleep) return;
+    _asleep = false;
+    _playSound('sounds/startle.wav');
+    _mascotSquish.value = 1;
+    if (mounted) setState(() {});
+  }
+
+  /// Appui long sur la mascotte : ronron (chat), moustache (incognito),
+  /// œuf (poulet).
+  void _mascotHold() {
+    switch (_mode) {
+      case AppMode.listen:
+        _purring = true;
+        if (_store.soundsOn) {
+          unawaited(_purrPlayer.play(AssetSource('sounds/purr.wav')));
+        }
+        if (_store.vibrationOn) {
+          Vibration.vibrate(pattern: [0, 70, 50], repeat: 0);
+        }
+      case AppMode.tap:
+        _setMascot('incog_mustache', const Duration(milliseconds: 1400));
+        _playSound('sounds/gloups.wav');
+      case AppMode.metro:
+        if (_egg.value == null) {
+          _egg.value = 0;
+          _eggBroken = false;
+          _setMascot('chicken_cluck', const Duration(milliseconds: 500));
+        }
+    }
+  }
+
+  void _mascotRelease() {
+    _mascotHoldTimer?.cancel();
+    if (_purring) {
+      _purring = false;
+      unawaited(_purrPlayer.stop());
+      Vibration.cancel();
+    }
+  }
+
+  /// Tap sur le chiffre : 10 en moins de 4 s → 420.
+  void _digitTap() {
+    final now = DateTime.now();
+    _digitTaps.add(now);
+    _digitTaps.removeWhere((d) => now.difference(d).inSeconds >= 4);
+    if (_digitTaps.length >= 10) {
+      _digitTaps.clear();
+      setState(() => _show420 = true);
+      _playSound('sounds/giggle.wav');
+      Timer(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _show420 = false);
+      });
+    }
+  }
+
+  /// Konami des plages : Auto, 60-120, Auto, 60-120 → preset caché.
+  void _rangeKonami(int index) {
+    _rangeSequence.add(index);
+    if (_rangeSequence.length > 4) _rangeSequence.removeAt(0);
+    if (!_store.crazyUnlocked &&
+        _rangeSequence.length == 4 &&
+        _rangeSequence[0] == 0 &&
+        _rangeSequence[1] == 1 &&
+        _rangeSequence[2] == 0 &&
+        _rangeSequence[3] == 1) {
+      _store.setCrazyUnlocked();
+      _playSound('sounds/giggle.wav');
+      _vibrate(pattern: [0, 40, 40, 40, 40, 120]);
+    }
+  }
+
+  /// Les plages disponibles (avec le preset caché si débloqué).
+  List<TempoRange> get _ranges =>
+      _store.crazyUnlocked ? [...kRanges, kCrazyRange] : kRanges;
 
   /// Le tutoriel : 4 écrans, au premier lancement ou depuis Options.
   Future<void> _showTutorial() {
@@ -693,6 +842,11 @@ class _ListenScreenState extends State<ListenScreen>
   void dispose() {
     _faceTimer?.cancel();
     _longPressTimer?.cancel();
+    _accel?.cancel();
+    _panicTimer?.cancel();
+    _mascotHoldTimer?.cancel();
+    _purrPlayer.dispose();
+    _egg.dispose();
     _mascotSquish.dispose();
     _metroBeatInBar.dispose();
     for (final n in _paradeSquish.values) {
@@ -1064,7 +1218,7 @@ class _ListenScreenState extends State<ListenScreen>
   }
 
   void _selectRange(int index) {
-    final range = kRanges[index];
+    final range = _ranges[index];
     _detector.minBpm = range.min;
     _detector.maxBpm = range.max;
     // L'a priori de tempo ne sert qu'en Auto : dans une plage 2:1 choisie
@@ -1222,6 +1376,37 @@ class _ListenScreenState extends State<ListenScreen>
         final idle = _idleMascot;
         if (_mascotFrame.value != idle) _mascotFrame.value = idle;
       }
+    }
+    // Mode nuit : 2 min sans rien (pas d'écoute, pas de métronome, pas de
+    // calage) → dodo. Réveil au premier tap (voir _wake).
+    if (!_asleep &&
+        !_isListening &&
+        !_metro.running &&
+        !_locked &&
+        DateTime.now().difference(_lastInteraction).inSeconds >= 120) {
+      _asleep = true;
+      if (mounted) setState(() {});
+    }
+    // L'œuf tombe (0,8 s) puis se casse.
+    final egg = _egg.value;
+    if (egg != null && !_eggBroken) {
+      final next = egg + 1 / 48;
+      if (next >= 1) {
+        _egg.value = 1;
+        _eggBroken = true;
+        _playSound('sounds/splotch.wav');
+        Timer(const Duration(milliseconds: 1200), () {
+          _egg.value = null;
+          _eggBroken = false;
+        });
+      } else {
+        _egg.value = next;
+      }
+    }
+    // Fin du délire de Psyllo.
+    if (_trippyUntil != null && t >= _trippyUntil!) {
+      _trippyUntil = null;
+      if (mounted) setState(() {});
     }
     // Le rebond du dino et l'écrasement de la mascotte retombent tout seuls.
     if (_dinoBounce.value > 0) {
@@ -1484,8 +1669,9 @@ class _ListenScreenState extends State<ListenScreen>
               );
             },
             // Un appui l'écrase (squish), il reprend sa forme tout seul.
-            child: GestureDetector(
-              onTapDown: (_) {
+            child: Listener(
+              behavior: HitTestBehavior.opaque,
+              onPointerDown: (_) {
                 _mascotSquish.value = 1;
                 if (_store.soundsOn) {
                   _squishPools[switch (_mode) {
@@ -1496,7 +1682,14 @@ class _ListenScreenState extends State<ListenScreen>
                       ?.start();
                 }
                 if (_mode == AppMode.metro) _selectMetroSound('chicken');
+                _mascotHoldTimer?.cancel();
+                _mascotHoldTimer = Timer(
+                  const Duration(milliseconds: 500),
+                  _mascotHold,
+                );
               },
+              onPointerUp: (_) => _mascotRelease(),
+              onPointerCancel: (_) => _mascotRelease(),
               child: ValueListenableBuilder<double>(
                 valueListenable: _mascotSquish,
                 builder: (context, sq, child) => Transform.scale(
@@ -1596,23 +1789,45 @@ class _ListenScreenState extends State<ListenScreen>
       fontWeight: FontWeight.bold,
       fontFeatures: const [FontFeature.tabularFigures()],
     );
-    final text = _displayBpm == null ? '—' : _displayBpm!.toStringAsFixed(1);
+    final text = _show420
+        ? '420'
+        : (_displayBpm == null ? '—' : _displayBpm!.toStringAsFixed(1));
 
-    if (!_locked) return Text(text, style: style);
+    if (_show420) {
+      return GestureDetector(
+        onTap: _digitTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            RainbowText(text, style: style),
+            const Text('🍄', style: TextStyle(fontSize: 40)),
+          ],
+        ),
+      );
+    }
+    if (!_locked) {
+      return GestureDetector(
+        onTap: _digitTap,
+        child: Text(text, style: style),
+      );
+    }
 
     // Calé : pendant le flash, les couleurs tournent et le texte clignote ;
     // ensuite, arc-en-ciel fixe.
-    return AnimatedBuilder(
-      animation: _flash,
-      builder: (context, _) {
-        final t = _flash.value;
-        final flashing = _flash.isAnimating && _store.lightsOn;
-        final blink = flashing ? (sin(t * 2 * pi * 9) > 0 ? 1.0 : 0.3) : 1.0;
-        return Opacity(
-          opacity: blink,
-          child: RainbowText(text, style: style, shift: flashing ? t * 3 : 0),
-        );
-      },
+    return GestureDetector(
+      onTap: _digitTap,
+      child: AnimatedBuilder(
+        animation: _flash,
+        builder: (context, _) {
+          final t = _flash.value;
+          final flashing = _flash.isAnimating && _store.lightsOn;
+          final blink = flashing ? (sin(t * 2 * pi * 9) > 0 ? 1.0 : 0.3) : 1.0;
+          return Opacity(
+            opacity: blink,
+            child: RainbowText(text, style: style, shift: flashing ? t * 3 : 0),
+          );
+        },
+      ),
     );
   }
 
@@ -2442,12 +2657,12 @@ class _ListenScreenState extends State<ListenScreen>
                               ),
                         ),
                         const SizedBox(height: 8),
-                        for (var i = 0; i < kRanges.length; i++)
+                        for (var i = 0; i < _ranges.length; i++)
                           CheckboxListTile(
                             value: i == _rangeIndex,
                             activeColor: kRainbow[i % kRainbow.length],
                             title: Text(
-                              kRanges[i].label,
+                              _ranges[i].label,
                               style: TextStyle(
                                 fontWeight: i == _rangeIndex
                                     ? FontWeight.bold
@@ -2460,6 +2675,7 @@ class _ListenScreenState extends State<ListenScreen>
                             dense: true,
                             onChanged: (_) {
                               _selectRange(i);
+                              _rangeKonami(i);
                               setDialogState(() {});
                             },
                           ),
@@ -2771,6 +2987,12 @@ class _ListenScreenState extends State<ListenScreen>
         if (_store.soundsOn) _squishPools[name]?.start();
         _selectMetroSound(name);
       },
+      onLongPress: name == 'psyllo'
+          ? () {
+              setState(() => _trippyUntil = _tick.value + 3);
+              _playSound('sounds/giggle.wav');
+            }
+          : null,
       child: ValueListenableBuilder<double>(
         valueListenable: _tick,
         builder: (context, t, _) {
@@ -2779,7 +3001,7 @@ class _ListenScreenState extends State<ListenScreen>
           final amp = [0.35, 0.6, 0.85, 1.2][currentTier] * (star ? 1.0 : 0.6);
           final sway = _metro.running ? 0.0 : 0.06 * sin(t * 1.4 + index * 1.3);
           final bob = _metro.running ? 0.0 : 2 * sin(t * 2.1 + index);
-          final blinking = (t + index) % (3.7 + index * 0.6) < 0.15;
+          final blinking = _asleep || (t + index) % (3.7 + index * 0.6) < 0.15;
           final Widget img = switch (name) {
             'dino' => DinoFace(face: 'head', size: size, blink: blinking),
             'pig' => const Text('🐷', style: TextStyle(fontSize: 50)),
@@ -2924,127 +3146,252 @@ class _ListenScreenState extends State<ListenScreen>
               ),
             ),
             child: SafeArea(
-              child: Stack(
-                children: [
-                  if (_mode == AppMode.metro) _buildMushroomDrift(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    child: Column(
-                      children: [
-                        _buildHeader(context),
-                        const Spacer(),
-
-                        if (_mode == AppMode.metro) ...[
-                          Expanded(flex: 20, child: _buildMetroScene(context)),
-                        ] else ...[
-                          // --- Le gros chiffre, encadré par les licornes / flammes
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              if (tap)
-                                _buildFlame(seed: 1)
-                              else
-                                _buildUnicorn(flip: false),
-                              const SizedBox(width: 8),
-                              _buildBpmDigits(context),
-                              const SizedBox(width: 8),
-                              if (tap)
-                                _buildFlame(seed: 2)
-                              else
-                                _buildUnicorn(flip: true),
-                            ],
-                          ),
-                          _buildBpmLabel(theme),
-                          _buildBeatDot(),
-                          _buildStatus(context),
-                          const Spacer(),
-
-                          // --- Le bouton, au centre ------------------------------
-                          _buildDinoButton(),
-                          const Spacer(),
-                        ],
-
-                        // --- Bas de l'écran ---------------------------------------
-                        const SizedBox(height: 56),
-                        _buildNeonBanner(),
-                        if (_error != null) ...[
-                          const SizedBox(height: 12),
-                          Text(
-                            _error!,
-                            style: const TextStyle(color: Colors.redAccent),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  if (_mode == AppMode.listen)
-                    Positioned(left: 8, bottom: 72, child: _buildOptionsSign()),
-                  if (_mode != AppMode.metro)
-                    Positioned(
-                      left: 0,
-                      right: 0,
-                      bottom: 72,
-                      child: Center(
-                        child: tap ? _buildLastTap() : _buildHistorySign(),
-                      ),
-                    ),
-                  if (_mode == AppMode.listen)
-                    Positioned(
-                      right: 52,
-                      bottom: 74,
-                      child: IconButton(
-                        onPressed: () => _setMode(AppMode.metro),
-                        tooltip: 'Mode Métronome',
-                        iconSize: 26,
-                        color: const Color(0xFF4FA3FF),
-                        icon: const Icon(Icons.av_timer),
-                      ),
-                    ),
-                  Positioned(right: 4, bottom: 72, child: _buildModeToggle()),
-                  // Ambiance réduite : petites icônes barrées, discrètes.
-                  if (!_store.soundsOn || !_store.lightsOn)
-                    Positioned(
-                      right: 10,
-                      top: 6,
-                      child: Opacity(
-                        opacity: 0.6,
-                        child: Row(
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) => _wake(),
+                child: _buildTrippy(
+                  Stack(
+                    children: [
+                      if (_mode == AppMode.metro) _buildMushroomDrift(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        child: Column(
                           children: [
-                            if (!_store.lightsOn)
-                              const Icon(Icons.flash_off, size: 18),
-                            if (!_store.soundsOn)
-                              const Icon(Icons.music_off, size: 18),
+                            _buildHeader(context),
+                            const Spacer(),
+
+                            if (_mode == AppMode.metro) ...[
+                              Expanded(
+                                flex: 20,
+                                child: _buildMetroScene(context),
+                              ),
+                            ] else ...[
+                              // --- Le gros chiffre, encadré par les licornes / flammes
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  if (tap)
+                                    _buildFlame(seed: 1)
+                                  else
+                                    _buildUnicorn(flip: false),
+                                  const SizedBox(width: 8),
+                                  _buildBpmDigits(context),
+                                  const SizedBox(width: 8),
+                                  if (tap)
+                                    _buildFlame(seed: 2)
+                                  else
+                                    _buildUnicorn(flip: true),
+                                ],
+                              ),
+                              _buildBpmLabel(theme),
+                              _buildBeatDot(),
+                              _buildStatus(context),
+                              const Spacer(),
+
+                              // --- Le bouton, au centre ------------------------------
+                              _buildDinoButton(),
+                              const Spacer(),
+                            ],
+
+                            // --- Bas de l'écran ---------------------------------------
+                            const SizedBox(height: 56),
+                            _buildNeonBanner(),
+                            if (_error != null) ...[
+                              const SizedBox(height: 12),
+                              Text(
+                                _error!,
+                                style: const TextStyle(color: Colors.redAccent),
+                              ),
+                            ],
                           ],
                         ),
                       ),
-                    ),
-                  // La fête : néons de toutes les couleurs tant que ça danse
-                  // (calé, beat en cours), dans les deux modes.
-                  if (_locked && _beatAnchor != null && _store.lightsOn)
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: ValueListenableBuilder<double>(
-                          valueListenable: _tick,
-                          builder: (context, t, _) {
-                            return CustomPaint(
-                              painter: _PartyPainter(
-                                (t - _partyStartedAt),
-                                _partySeed,
-                                count: _mode == AppMode.metro
-                                    ? [8, 18, 30, 48][tierFor(_metro.bpm)]
-                                    : 42,
-                              ),
-                            );
-                          },
+                      if (_mode == AppMode.listen)
+                        Positioned(
+                          left: 8,
+                          bottom: 72,
+                          child: _buildOptionsSign(),
                         ),
+                      if (_mode != AppMode.metro)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 72,
+                          child: Center(
+                            child: tap ? _buildLastTap() : _buildHistorySign(),
+                          ),
+                        ),
+                      if (_mode == AppMode.listen)
+                        Positioned(
+                          right: 52,
+                          bottom: 74,
+                          child: IconButton(
+                            onPressed: () => _setMode(AppMode.metro),
+                            tooltip: 'Mode Métronome',
+                            iconSize: 26,
+                            color: const Color(0xFF4FA3FF),
+                            icon: const Icon(Icons.av_timer),
+                          ),
+                        ),
+                      Positioned(
+                        right: 4,
+                        bottom: 72,
+                        child: _buildModeToggle(),
                       ),
-                    ),
-                ],
+                      // Mode nuit : voile sombre et Zzz.
+                      if (_asleep)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: Container(
+                              color: Colors.black.withValues(alpha: 0.55),
+                              child: ValueListenableBuilder<double>(
+                                valueListenable: _tick,
+                                builder: (context, t, _) => Stack(
+                                  children: [
+                                    for (var i = 0; i < 3; i++)
+                                      Positioned(
+                                        left:
+                                            40.0 +
+                                            i * 110 +
+                                            10 * sin(t * 1.3 + i),
+                                        top:
+                                            120.0 +
+                                            i * 40 -
+                                            30 * ((t * 0.4 + i * 0.33) % 1.0),
+                                        child: Opacity(
+                                          opacity:
+                                              1 - ((t * 0.4 + i * 0.33) % 1.0),
+                                          child: Text(
+                                            'Z' * (i + 1),
+                                            style: TextStyle(
+                                              fontFamily: 'RubikSprayPaint',
+                                              fontSize: 24.0 + i * 10,
+                                              color: Colors.white70,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      // L'œuf du poulet qui tombe, puis l'omelette.
+                      ValueListenableBuilder<double?>(
+                        valueListenable: _egg,
+                        builder: (context, egg, _) {
+                          if (egg == null) return const SizedBox.shrink();
+                          return LayoutBuilder(
+                            builder: (context, c) => Positioned(
+                              left: c.maxWidth / 2 - 20,
+                              top: 150 + (c.maxHeight - 230) * egg * egg,
+                              child: IgnorePointer(
+                                child: Text(
+                                  _eggBroken ? '🍳' : '🥚',
+                                  style: const TextStyle(fontSize: 40),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+                      // Ambiance réduite : petites icônes barrées, discrètes.
+                      if (!_store.soundsOn || !_store.lightsOn)
+                        Positioned(
+                          right: 10,
+                          top: 6,
+                          child: Opacity(
+                            opacity: 0.6,
+                            child: Row(
+                              children: [
+                                if (!_store.lightsOn)
+                                  const Icon(Icons.flash_off, size: 18),
+                                if (!_store.soundsOn)
+                                  const Icon(Icons.music_off, size: 18),
+                              ],
+                            ),
+                          ),
+                        ),
+                      // La fête : néons de toutes les couleurs tant que ça danse
+                      // (calé, beat en cours), dans les deux modes.
+                      if (_locked && _beatAnchor != null && _store.lightsOn)
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: ValueListenableBuilder<double>(
+                              valueListenable: _tick,
+                              builder: (context, t, _) {
+                                return CustomPaint(
+                                  painter: _PartyPainter(
+                                    (t - _partyStartedAt),
+                                    _partySeed,
+                                    count: _mode == AppMode.metro
+                                        ? [8, 18, 30, 48][tierFor(_metro.bpm)]
+                                        : 42,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ),
             ),
           ),
         ),
       ),
+    );
+  }
+
+  /// Délire de Psyllo : les couleurs tournent et tout ondule pendant 3 s.
+  Widget _buildTrippy(Widget child) {
+    if (_trippyUntil == null) return child;
+    return ValueListenableBuilder<double>(
+      valueListenable: _tick,
+      builder: (context, t, _) {
+        final h = (t * 1.5) % 1.0 * 2 * pi;
+        // Matrice de rotation de teinte (approximation classique).
+        final c = cos(h), s = sin(h);
+        final m = <double>[
+          0.213 + c * 0.787 - s * 0.213,
+          0.715 - c * 0.715 - s * 0.715,
+          0.072 - c * 0.072 + s * 0.928,
+          0,
+          0,
+          0.213 - c * 0.213 + s * 0.143,
+          0.715 + c * 0.285 + s * 0.140,
+          0.072 - c * 0.072 - s * 0.283,
+          0,
+          0,
+          0.213 - c * 0.213 - s * 0.787,
+          0.715 - c * 0.715 + s * 0.715,
+          0.072 + c * 0.928 + s * 0.072,
+          0,
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+        ];
+        return ColorFiltered(
+          colorFilter: ColorFilter.matrix(m),
+          child: Transform(
+            alignment: Alignment.center,
+            transform: Matrix4.identity()
+              ..setEntry(0, 1, 0.06 * sin(t * 4))
+              ..scaleByDouble(
+                1 + 0.03 * sin(t * 3),
+                1 + 0.03 * sin(t * 3),
+                1,
+                1,
+              ),
+            child: child,
+          ),
+        );
+      },
     );
   }
 }

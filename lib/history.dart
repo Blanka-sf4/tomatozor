@@ -58,6 +58,9 @@ class HistoryStore {
   /// Le tutoriel a-t-il été vu ?
   bool tutorialSeen = false;
 
+  /// Le preset caché « 1-9999 » (mode fou) est-il débloqué ?
+  bool crazyUnlocked = false;
+
   Directory? _dir;
 
   Future<Directory> _directory() async {
@@ -99,6 +102,7 @@ class HistoryStore {
       vibrationOn = (j['vibrationOn'] as bool?) ?? true;
       metroVibrate = (j['metroVibrate'] as bool?) ?? false;
       tutorialSeen = (j['tutorialSeen'] as bool?) ?? false;
+      crazyUnlocked = (j['crazyUnlocked'] as bool?) ?? false;
     } catch (_) {
       // Index illisible : on repart de zéro plutôt que de planter.
       entries.clear();
@@ -121,6 +125,7 @@ class HistoryStore {
         'vibrationOn': vibrationOn,
         'metroVibrate': metroVibrate,
         'tutorialSeen': tutorialSeen,
+        'crazyUnlocked': crazyUnlocked,
       }),
     );
   }
@@ -162,6 +167,11 @@ class HistoryStore {
 
   Future<void> setMetroBeatsPerBar(int n) async {
     metroBeatsPerBar = n;
+    await _save();
+  }
+
+  Future<void> setCrazyUnlocked() async {
+    crazyUnlocked = true;
     await _save();
   }
 
